@@ -1,0 +1,30 @@
+{
+  "name": "diya-sdk-status",
+  "version": "0.8.0",
+  "homepage": "https://github.com/diya-sdk/diya-sdk-status",
+  "authors": [
+    "Sylvain Mahé <sylv.mahe@gmail.com>"
+  ],
+  "description": "SDK for accessing Diya One status service",
+  "main": "build/status.min.js",
+  "keywords": [
+    "Diya",
+    "One",
+    "Partnering",
+    "SDK"
+  ],
+  "license": "LGPL v3",
+  "private": true,
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests",
+    "examples",
+    "package.json"
+  ],
+  "dependencies": {
+    "q": "1.4"
+  }
+}
