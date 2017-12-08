@@ -278,7 +278,7 @@
 						robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId;
 						robotIds[robotName] = robotId;
 						this.getAllStatuses(robotName, function (model) {
-							callback(model);
+							callback(model, peerId);
 						})
 					}
 					if (objData[objectPath]['fr.partnering.Status.Part'] != null) {
@@ -297,7 +297,7 @@
 								sendData[0] = data;
 								this._getRobotModelFromRecv2(sendData, robotId, robotName);
 								if (typeof callback === 'function') {
-									callback(this.robotModel);
+									callback(this.robotModel, peerId);
 								}
 							}
 						});
