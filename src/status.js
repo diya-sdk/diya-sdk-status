@@ -53,6 +53,14 @@
 			if(DEBUG) console.log(message);
 		},
 
+		debug: function(message){
+			if(DEBUG) console.log(message);
+		},
+
+		warn: function(message){
+			if(DEBUG) console.warn(message);
+		},
+
 		error: function(message){
 			if(DEBUG) console.error(message);
 		}
@@ -258,6 +266,9 @@
 	 * Subscribe to error/status updates
 	 */
 	Status.prototype.watch = function (robotNames, callback) {
+		Logger.debug(`Status.watch: robotNames = `)
+		Logger.debug(robotNames)
+
 		this.selector.setMaxListeners(0);
 		this.selector._connection.setMaxListeners(0);
 		let sendData = [];
@@ -272,12 +283,16 @@
 			}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
 				let robotName = '';
 				let robotId = 1;
+
+				Logger.debug(`Status.GetManagedObjects: objData = `)
+				Logger.debug(objData)
+
 				for (let objectPath in objData) {
 					if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
 						robotName = objData[objectPath]['fr.partnering.Status.Robot'].RobotName;
 						robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId;
 						robotIds[robotName] = robotId;
-						this.getAllStatuses(robotName, function (model) {
+						this.triggerStatusChanges(robotId, robotName, function (model) {
 							callback(model, peerId);
 						})
 					}
@@ -294,6 +309,7 @@
 							if (err != null) {
 								Logger.error("StatusSubscribe:" + err);
 							} else {
+								Logger.debug(`StatusChanged is called`)
 								sendData[0] = data;
 								this._getRobotModelFromRecv2(sendData, robotId, robotName);
 								if (typeof callback === 'function') {
@@ -549,43 +565,33 @@
 	 * @param callback		return callback(-1 if not found/data otherwise)
 	 * @param _full 	more data about status
 	 */
-	Status.prototype.getAllStatuses = function (robotName, callback) {
-		let req = this.selector.request({
-			service: 'status',
-			func: 'GetManagedObjects',
+	Status.prototype.triggerStatusChanges = function (robot_id, robot_name, callback) {
+
+		Logger.debug(`Status.triggerStatusChanges: robotId, roboName = `)
+		Logger.debug(robot_id)
+		Logger.debug(robot_name)
+
+		let req = {
+			service: "status",
+			func: "FireAllStatuses",
 			obj: {
-				interface: 'org.freedesktop.DBus.ObjectManager',
+				interface: 'fr.partnering.Status',
+				path: "/fr/partnering/Status"
 			}
-		}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
-			let objectPath = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
-			if (objData[objectPath] != null) {
-				if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
-					let robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId
-					//var full = _full || false;
-					this.selector.request({
-						service: "status",
-						func: "GetAllParts",
-						obj: {
-							interface: 'fr.partnering.Status.Robot',
-							path: objectPath
-						}
-					}, (peerId, err, data) => {
-						if (err != null) {
-							if (typeof callback === 'function') callback(-1);
-							throw new Error(err)
-						}
-						else {
-							this._getRobotModelFromRecv2(data, robotId, robotName);
-							if (typeof callback === 'function') callback(this.robotModel);
-						}
-					});
-				} else {
-					Logger.error("Interface fr.partnering.Status.Robot doesn't exist!")
-				}
-			} else {
-				Logger.error("ObjectPath " + objectPath + " doesn't exist!")
+		}
+
+		let fn = (peerId, err, data) => {
+			if (err == null) {
+				return;
 			}
-		})
+			Logger.warn(`StatusChanged signal not fired at intial connection`)
+			if (typeof callback === 'function') {
+				callback(-1)
+				return
+			}
+			throw new Error(err)
+		}
+		this.selector.request(req, fn);
 	};
 
 	Status.prototype.splitAndCamelCase = function (inString, delimiter) {
