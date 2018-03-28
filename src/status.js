@@ -77,7 +77,7 @@
 		/** model of robot : available parts and status **/
 		this.robotModel = [];
 		this._robotModelInit = false;
-		this._statusReferenceMap = [];
+		this._partReferenceMap = [];
 
 		/*** structure of data config ***
 			 criteria :
@@ -268,7 +268,7 @@
 	 * @param {*} robot_object 
 	 * @param {function} callback		return callback(-1 if not found/data otherwise)
 	 */
-	Status.prototype._getMultidayStatuses = function (robot_objects, callback) {
+	Status.prototype._getAndUpdateMultidayStatuses = function (robot_objects, callback) {
 		Logger.debug(`Status.getInitialStatus`)
 		robot_objects.forEach(object => {
 			if (object.RobotId == null || object.RobotName == null) {
@@ -303,27 +303,56 @@
 		})
 	};
 
-	Status.prototype._getStatusReferenceMap = function () {
-		if (this._statusReferenceMap == null || this._statusReferenceMap.length == 0) {
+	/**
+	 * Get 'Parts' reference map to reduce status payload. Duplicated contents in status are stored in the map.
+	 */
+	Status.prototype._getPartReferenceMap = function () {
+		if (this._partReferenceMap == null || this._partReferenceMap.length == 0) {
 			return new Promise((resolve, reject) => {
 				this.selector.request({
 					service: 'Status',
-					func: 'GetStatusReferenceMap',
+					func: 'GetPartReferenceMap',
 					obj: {
 						interface: 'fr.partnering.Status',
 						path: '/fr/partnering/Status'
 					}
 				}, (peerId, err, data) => {
-					Logger.debug(`StatusReferenceMap, err`, data, err)
+					Logger.debug(`PartReferenceMap, err`, data, err)
 					if (data == null) {
 						data = []
 					}
-					this._statusReferenceMap = data
+					this._partReferenceMap = data
 					resolve() // returns a map of partid to its properties
 				})
 			})
 		}
-		Logger.debug('StatusReferenceMap already exists, no need to request. Number of parts:', this._statusReferenceMap.length)
+		Logger.debug('PartReferenceMap already exists, no need to request. Number of parts:', this._partReferenceMap.length)
+	};
+
+	/**
+	 * Get 'StatusEvts' reference map to reduce status payload. Duplicated contents in status are stored in the map.
+	 */
+	Status.prototype._getStatusEvtReferenceMap = function () {
+		if (this._statusEvtReferenceMap == null || this._statusEvtReferenceMap.length == 0) {
+			return new Promise((resolve, reject) => {
+				this.selector.request({
+					service: 'Status',
+					func: 'GetStatusEvtReferenceMap',
+					obj: {
+						interface: 'fr.partnering.Status',
+						path: '/fr/partnering/Status'
+					}
+				}, (peerId, err, data) => {
+					Logger.debug(`StatusEvtReferenceMap, err`, data, err)
+					if (data == null) {
+						data = []
+					}
+					this._statusEvtReferenceMap = data
+					resolve() // returns a map of partid to its properties
+				})
+			})
+		}
+		Logger.debug('StatusEvtReferenceMap already exists, no need to request. Number of parts:', this._statusEvtReferenceMap.length)
 	};
 
 	/**
@@ -383,57 +412,59 @@
 		let parts = [] // list of part object
 		let meshedRobotNames = [] // list of names of robots and diya-server in the mesh network
 
-		return Promise.try(_ => this._getStatusReferenceMap())
-		.then(_ => getNeighbors)
-		.then(ret => {
-			if (ret == null || !Array.isArray(ret)) {
-				meshedRobotNames = []
-			}
-			let hostname = this.selector._connection._self
-			meshedRobotNames = ret.map(r => r[0]) // we only keep the robot names
-			if (!meshedRobotNames.includes(hostname)) {
-				meshedRobotNames.push(hostname) // add hostname
-			}
-		})
-		.then(_ => getParts)
-		.then(ret => {
-			for (let objectPath in ret) {
-				// the object obtained from the object path
-				let object = ret[objectPath]
+		// Retrieve reference map of keys and values in order to reduce payload for status requests
+		return Promise.try(_ => this._getPartReferenceMap())
+			.then(_ => this._getStatusEvtReferenceMap())
+			.then(_ => getNeighbors)
+			.then(ret => {
+				if (ret == null || !Array.isArray(ret)) {
+					meshedRobotNames = []
+				}
+				let hostname = this.selector._connection._self
+				meshedRobotNames = ret.map(r => r[0]) // we only keep the robot names
+				if (!meshedRobotNames.includes(hostname)) {
+					meshedRobotNames.push(hostname) // add hostname, i.e. the diya-server, which is not in the list of neighbors
+				}
+			})
+			.then(_ => getParts)
+			.then(ret => {
+				for (let objectPath in ret) {
+					// the object obtained from the object path
+					let object = ret[objectPath]
 
-				// if the return object is of a robot in the list of neighbors, or of the diya-server, retrieve all ofits relevant statuses
-				Logger.debug('Object', object)
-				Logger.debug('robotIface', robotIface)
+					// if the return object is of a robot in the list of neighbors, or of the diya-server, retrieve all ofits relevant statuses
+					Logger.debug('Object', object)
+					Logger.debug('robotIface', robotIface)
 
-				if (object.hasOwnProperty(robotIface)) {
-					robots.push(object[robotIface])
+					if (object.hasOwnProperty(robotIface)) {
+						robots.push(object[robotIface])
+					}
+
+					// if the return object is of a part, listen to signal StatusChanged of the part
+					if (object.hasOwnProperty(partIface)) {
+						parts.push(object[partIface])
+					}
 				}
 
-				// if the return object is of a part, listen to signal StatusChanged of the part
-				if (object.hasOwnProperty(partIface)) {
-					parts.push(object[partIface])
-				}
-			}
+				Logger.debug('getParts', ret)
+				Logger.debug('robots', robots)
 
-			Logger.debug('getParts', ret)
-			Logger.debug('robots', robots)
+				// filer and keep the diya-server and the robots that are only in the same mesh networks
+				robots = robots.filter(robot => meshedRobotNames.includes(robot.RobotName)) // only keeps robots that are neighbors (i.e. in the same mesh network)
 
-			// filer and keep the diya-server and the robots that are only in the same mesh networks
-			robots = robots.filter(robot => meshedRobotNames.includes(robot.RobotName)) // only keeps robots that are neighbors (i.e. in the same mesh network)
+				// TODO - filter parts that belongs to the filtered robots
+			})
+			.then(_ => {
+				// Retrieve initial statuses from the filtered robots
+				Logger.debug('Robots and diya-server in the mesh network:', robots)
+				return this._getAndUpdateMultidayStatuses(robots, callback)
+			})
+			.then(_ => {
+				// Listen to StatusChange from the parts belonging to the filtered robots
+				Logger.debug('Parts belonging to the filtered robots:', parts)
 
-			// TODO - filter parts that belongs to the filtered robots
-		})
-		.then(_ => {
-			// Retrieve initial statuses from the filtered robots
-			Logger.debug('Robots and diya-server in the mesh network:', robots)
-			return this._getMultidayStatuses(robots, callback)
-		})
-		.then(_ => {
-			// Listen to StatusChange from the parts belonging to the filtered robots
-			Logger.debug('Parts belonging to the filtered robots:', parts)
-
-			// TODO
-		})
+				// TODO
+			})
 
 		if (true) return
 
@@ -554,8 +585,11 @@
 	 * @return {[type]}		[description]
 	 */
 	Status.prototype._getRobotModelFromRecv2 = function(data, robotId, robotName) {
-		if (this._statusReferenceMap == null) {
-			this._statusReferenceMap = []
+		if (this._partReferenceMap == null) {
+			this._partReferenceMap = []
+		}
+		if (this._statusEvtReferenceMap == null) {
+			this._statusEvtReferenceMap = []
 		}
 		if(this.robotModel == null)
 			this.robotModel = [];
@@ -580,11 +614,22 @@
 			let partId = d[0];
 			let time = d[1];
 			let code = d[2];
-			let codeRef = d[3];
-			let msg = d[4];
-			let critLevel = d[5];
 
-			let partReference = this._statusReferenceMap[partId];
+			// map the hash value to the status event values
+			let hash = d[3];
+			let statusEvtReference = this._statusEvtReferenceMap[hash]
+			if (statusEvtReference == null) {
+				Logger.warn(`StatusEvtReference finds no map for hash key ${hash}`)
+			}
+			let codeRef = statusEvtReference == null ? null : statusEvtReference[0];
+			let msg = statusEvtReference == null ? null : statusEvtReference[1];
+			let critLevel = statusEvtReference == null ? null : statusEvtReference[2];
+
+			// map the partId to the part reference values
+			let partReference = this._partReferenceMap[partId];
+			if (partReference == null) {
+				Logger.warn(`PartReference finds no map for partId ${partId}`)
+			}
 			let partName = partReference == null ? null : partReference[0];
 			let label = partReference == null ? null : partReference[1];
 			let category = partReference == null ? null : partReference[2];
