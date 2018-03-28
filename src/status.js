@@ -291,8 +291,8 @@
 					if (typeof callback === 'function') callback(-1);
 					throw new Error(err)
 				}
-				// Update robotModel variable
 				Logger.debug('Received multiday statuses of robot', object.RobotId, object.RobotName, data)
+				// Update robotModel variable
 				this._getRobotModelFromRecv2(data, object.RobotId, object.RobotName);
 				if (typeof callback === 'function') {
 					callback(this.robotModel)
@@ -356,6 +356,68 @@
 	};
 
 	/**
+	 * Subscribes to status changes for all parts
+	 * @param {*} parts 
+	 * @param {*} callback 
+	 */
+	Status.prototype._subscribeToStatusChanged = function (parts, callback) {
+		if (parts == null) {
+			return
+		}
+
+		if (true) {
+			return
+		}
+
+		parts.forEach(part => {
+			let obj = {
+				service: 'status',
+				func: 'StatusChanged',
+				obj: {
+					interface: 'fr.partnering.Status.Part',
+					path: objectPath
+				}
+			}
+			let fn = (peerId, err, data) => {
+				if (err != null) {
+					Logger.error("StatusSubscribe:" + err)
+					return
+				}
+				Logger.debug(`StatusChanged is called, data:`, data)
+				// Update robotModel variable
+				this._getRobotModelFromRecv2(data, part.RobotId, part.RobotName);
+				if (typeof callback === 'function') {
+					callback(this.robotModel);
+				}
+			}
+			let subs = this.selector.subscribe(obj, fn);
+			this.subscriptions.push(subs);
+		})
+
+	// 	let subs = this.selector.subscribe({// subscribes to status changes for all parts
+	// 		service: 'status',
+	// 		func: 'StatusChanged',
+	// 		obj: {
+	// 				interface: 'fr.partnering.Status.Part',
+	// 				path: objectPath
+	// 		},
+	// 		data: robotNames
+	// }, (peerId, err, data) => {
+	// 		if (err != null) {
+	// 				Logger.error("StatusSubscribe:" + err);
+	// 		} else {
+	// 				sendData[0] = data;
+	// 				this._getRobotModelFromRecv2(sendData, robotId, robotName);
+	// 				if (typeof callback === 'function') {
+	// 						callback(this.robotModel, peerId);
+	// 				}
+	// 		}
+	// });
+	// this.subscriptions.push(subs);
+
+	}
+
+	/**
 	 * Query for initial statuses
 	 * Subscribe to error/status updates
 	 */
@@ -368,12 +430,8 @@
 		// Promise to retrieve list of paired neighbors, i.e. all neighbor robots in the same mesh network
 		let getNeighbors = new Promise((resolve, reject) => {
 			this.selector.request({
-				service: 'DiyaNode',
+				service: 'MeshNetwork',
 				func: 'ListNeighbors',
-				obj: {
-					interface: 'fr.partnering.DiyaNode.MeshNetwork',
-					path: '/fr/partnering/DiyaNode/MeshNetwork'
-				}
 			}, (peerId, err, neighbors) => {
 				Logger.debug(`neighbors, err`, neighbors, err)
 				if (err != null) {
@@ -388,7 +446,7 @@
 		})
 
 		// Promise to retrieve all objects (robots, parts) exposed in DBus by diya-node-status
-		let getParts = new Promise((resolve, reject) => {
+		let getRobotsAndParts = new Promise((resolve, reject) => {
 			this.selector.request({
 				service: 'status',
 				func: 'GetManagedObjects',
@@ -399,7 +457,6 @@
 				if (err != null || objData == null) {
 					reject(err)
 				}
-				Logger.debug(`ManagedParts`, objData)
 				resolve(objData) // returns a map that links the object path to its corresponding interface
 			})
 		})
@@ -408,6 +465,7 @@
 		let partIface = 'fr.partnering.Status.Part'
 
 		// js objects of robots and parts
+		let robotMap = new Map() // map robot name to id
 		let robots = [] // list of robot objects
 		let parts = [] // list of part object
 		let meshedRobotNames = [] // list of names of robots and diya-server in the mesh network
@@ -426,7 +484,7 @@
 					meshedRobotNames.push(hostname) // add hostname, i.e. the diya-server, which is not in the list of neighbors
 				}
 			})
-			.then(_ => getParts)
+			.then(_ => getRobotsAndParts)
 			.then(ret => {
 				for (let objectPath in ret) {
 					// the object obtained from the object path
@@ -436,35 +494,46 @@
 					Logger.debug('Object', object)
 					Logger.debug('robotIface', robotIface)
 
-					if (object.hasOwnProperty(robotIface)) {
+					if (object.hasOwnProperty(robotIface)) { // this is robot object
 						robots.push(object[robotIface])
 					}
 
 					// if the return object is of a part, listen to signal StatusChanged of the part
-					if (object.hasOwnProperty(partIface)) {
-						parts.push(object[partIface])
+					if (object.hasOwnProperty(partIface)) { // this is a part object
+						let part = object[partIface]
+						part.objectPath = objectPath
+						part.RobotName = objectPath.split('/')[5] /* /fr/partnering/Status/Robots/B1R00037/Parts/voct */
+						parts.push(part)
 					}
 				}
 
-				Logger.debug('getParts', ret)
 				Logger.debug('robots', robots)
+				Logger.debug('parts', parts)
 
 				// filer and keep the diya-server and the robots that are only in the same mesh networks
 				robots = robots.filter(robot => meshedRobotNames.includes(robot.RobotName)) // only keeps robots that are neighbors (i.e. in the same mesh network)
 
-				// TODO - filter parts that belongs to the filtered robots
-			})
-			.then(_ => {
-				// Retrieve initial statuses from the filtered robots
-				Logger.debug('Robots and diya-server in the mesh network:', robots)
-				return this._getAndUpdateMultidayStatuses(robots, callback)
-			})
-			.then(_ => {
-				// Listen to StatusChange from the parts belonging to the filtered robots
-				Logger.debug('Parts belonging to the filtered robots:', parts)
+				// filter parts that belongs to the robot in the mesh network (including the diya-server)
+				parts = parts.filter(part => meshedRobotNames.includes(part.RobotName)) // only keeps parts belonging to neighbors (i.e. in the same mesh network)
 
-				// TODO
+				// create map of robot name to id for setting RobotId to paths
+				robots.forEach(robot => {
+					if (robotMap.has(robot.RobotName)) {
+						return
+					}
+					robotMap.set(robot.RobotName, robot.RobotId)
+				})
+
+				// set RobotId to each part
+				parts.forEach(part => {
+					part.RobotId = robotMap.get(part.RobotName)
+				})
+				
+				Logger.debug('meshed robots', robots)
+				Logger.debug('meshed parts', parts)
 			})
+			.then(_ => this._getAndUpdateMultidayStatuses(robots, callback)) // Retrieve initial statuses from the filtered robots
+			.then(_ => this._subscribeToStatusChanged(parts, callback)) // Listen to StatusChange from the parts belonging to the filtered robots
 
 		if (true) return
 
