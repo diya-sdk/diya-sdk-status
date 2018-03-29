@@ -1,3 +1,5 @@
+import { Stats } from 'fs';
+
 /*
  * Copyright : Partnering 3.0 (2007-2016)
  * Author : Sylvain Mahé <sylvain.mahe@partnering.fr>
@@ -263,45 +265,96 @@
 		return data;
 	};
 
-	/**
- 	 * Get all statuses within 4 days
-	 * @param {*} robot_object 
-	 * @param {function} callback		return callback(-1 if not found/data otherwise)
-	 */
-	Status.prototype._getAndUpdateMultidayStatuses = function (robot_objects, callback) {
-		Logger.debug(`Status.getInitialStatus`)
-		robot_objects.forEach(object => {
-			if (object.RobotId == null || object.RobotName == null) {
-				Logger.warn(`Multiday status request error: both RobotId and RobotName should be not null: ${object.RobotId}, ${object.RobotName}`)
-				return
-			}
-			let req = {
+	// /**
+ 	//  * Get all statuses within 4 days
+	//  * @param {*} robot_object 
+	//  * @param {function} callback		return callback(-1 if not found/data otherwise)
+	//  */
+	// Status.prototype._getAndUpdateMultidayStatuses = function (robot_objects, callback) {
+	// 	Logger.debug(`Status.getInitialStatus`)
+	// 	robot_objects.forEach(object => {
+	// 		if (object.RobotId == null || object.RobotName == null) {
+	// 			Logger.warn(`Multiday status request error: both RobotId and RobotName should be not null: ${object.RobotId}, ${object.RobotName}`)
+	// 			return
+	// 		}
+	// 		let req = {
+	// 			service: "status",
+	// 			func: "GetMultidayStatuses",
+	// 			obj: {
+	// 				interface: 'fr.partnering.Status',
+	// 				path: "/fr/partnering/Status"
+	// 			},
+	// 			data: {
+	// 				robot_names: [object.RobotName]
+	// 			}
+	// 		}
+	// 		let fn = (peerId, err, data) => {
+	// 			if (err != null) {
+	// 				if (typeof callback === 'function') callback(-1);
+	// 				throw new Error(err)
+	// 			}
+	// 			Logger.debug('Received multiday statuses of robot', object.RobotId, object.RobotName, data)
+	// 			// Update robotModel variable
+	// 			this._getRobotModelFromRecv2(data, object.RobotId, object.RobotName);
+	// 			if (typeof callback === 'function') {
+	// 				callback(this.robotModel)
+	// 			}
+	// 		}
+	// 		Logger.debug(`Requesting multiday statuses of robot:`, object.RobotId, object.RobotName)
+	// 		this.selector.request(req, fn)
+	// 	})
+	// };
+
+	Status.prototype._subscribeToMultidayStatusUpdate = function (robot_objects, callback) {
+		Logger.debug(`Subscribe to MultidayStatusUpdate`)
+		let subs = this.selector.subscribe({
+				service: 'status',
+				func: 'MultidayStatusUpdated',
+				obj: {
+					interface: 'fr.partnering.Status',
+					path: "/fr/partnering/Status"
+				}
+			}, (peerId, err, data) => {
+				Logger.debug(`RECEIVED SUBSCRIPTION`, data)
+				if (err != null) {
+					Logger.error("StatusSubscribe:" + err)
+					return
+				}
+				if (!Array.isArray(data)) {
+					Logger.warn("Malformed data from signal MultidayStatusUpdated:" + data)
+					return
+				}
+				let unpackedData = this._unpackRobotModels(data[0])
+				Logger.debug(`MultidayStatusUpdated is called, data:`, unpackedData)
+				this._getRobotModelFromRecv2(unpackedData) // update this.robotModel
+				Logger.debug(`RobotModel after unpacked:`, this.robotModel)
+				if (typeof callback === 'function') {
+					callback(this.robotModel);
+				}
+		})
+		this.subscriptions.push(subs)
+
+		Logger.debug(`Send request for MultidayStatusUpdate`, robotNames)
+		let robotNames = robot_objects.map(robot => robot.RobotName)
+		this.selector.request({
 				service: "status",
-				func: "GetMultidayStatuses",
+				func: "TriggerMultidayStatuses",
 				obj: {
 					interface: 'fr.partnering.Status',
 					path: "/fr/partnering/Status"
 				},
 				data: {
-					robot_names: [object.RobotName]
+					robot_names: robotNames
 				}
-			}
-			let fn = (peerId, err, data) => {
+			}, (peerId, err, data) => {
+				// Do nothing since the server should reponse back via signals
 				if (err != null) {
+					Logger.warn(`Cannot connect to status service: ${err}`)
 					if (typeof callback === 'function') callback(-1);
 					throw new Error(err)
 				}
-				Logger.debug('Received multiday statuses of robot', object.RobotId, object.RobotName, data)
-				// Update robotModel variable
-				this._getRobotModelFromRecv2(data, object.RobotId, object.RobotName);
-				if (typeof callback === 'function') {
-					callback(this.robotModel)
-				}
-			}
-			Logger.debug(`Requesting multiday statuses of robot:`, object.RobotId, object.RobotName)
-			this.selector.request(req, fn)
 		})
-	};
+	}
 
 	/**
 	 * Get 'Parts' reference map to reduce status payload. Duplicated contents in status are stored in the map.
@@ -491,9 +544,6 @@
 					let object = ret[objectPath]
 
 					// if the return object is of a robot in the list of neighbors, or of the diya-server, retrieve all ofits relevant statuses
-					Logger.debug('Object', object)
-					Logger.debug('robotIface', robotIface)
-
 					if (object.hasOwnProperty(robotIface)) { // this is robot object
 						robots.push(object[robotIface])
 					}
@@ -532,8 +582,12 @@
 				Logger.debug('meshed robots', robots)
 				Logger.debug('meshed parts', parts)
 			})
-			.then(_ => this._getAndUpdateMultidayStatuses(robots, callback)) // Retrieve initial statuses from the filtered robots
-			.then(_ => this._subscribeToStatusChanged(parts, callback)) // Listen to StatusChange from the parts belonging to the filtered robots
+			// Sending fixed chunks to limit payload
+			.then(_ => this._subscribeToMultidayStatusUpdate(robots, callback)) // Retrieve initial statuses from the filtered robots
+			
+			// OK - in case sending a large chunk for each robot, payload can be large
+			// .then(_ => this._getAndUpdateMultidayStatuses(robots, callback)) // Retrieve initial statuses from the filtered robots
+			// .then(_ => this._subscribeToStatusChanged(parts, callback)) // Listen to StatusChange from the parts belonging to the filtered robots
 
 		if (true) return
 
@@ -647,62 +701,123 @@
 		})
 	};
 
-
 	/**
-	 * Update internal robot model with received data (version 2)
-	 * @param  {Object} data data received from DiyaNode by websocket
-	 * @return {[type]}		[description]
+	 * Restore zipped data from signal MultidayStatusUpdated to a compliant state for use in function {@link _getRobotModelFromRecv2}
+	 * @param {object} data - zipped data received from signal MultidayStatusUpdated, this data is compressed to reduce memory footprint
+	 * t.DBUS_DICT (
+	 *		t.DBUS_STRING,     // robot info i.e. 4:D1R00035
+	 *		t.DBUS_DICT (
+	 *			t.DBUS_STRING, // partId
+	 *			t.DBUS_ARRAY (t.DBUS_STRUCT(t.DBUS_UINT64, t.DBUS_UINT16, t.DBUS_UINT32))
+	 *                         // time, code, hash
+	 *		)
+	 * @return {object} extracted data in form of array of [PartId, Category, PartName, Label, Time, Code, CodeRef, Msg, CritLevel, Description, RobotId, RobotName]
 	 */
-	Status.prototype._getRobotModelFromRecv2 = function(data, robotId, robotName) {
+	Status.prototype._unpackRobotModels = function(data) {
+		if (data == null) {
+			return
+		}
+		// These two reference map should have been retrieved at initial connection
 		if (this._partReferenceMap == null) {
 			this._partReferenceMap = []
 		}
 		if (this._statusEvtReferenceMap == null) {
 			this._statusEvtReferenceMap = []
 		}
-		if(this.robotModel == null)
-			this.robotModel = [];
-
-		if(this.robotModel[robotId] != null)
-			this.robotModel[robotId].parts = {}; // reset parts
-
-		if(this.robotModel[robotId] == null)
-			this.robotModel[robotId] = {};
-
-		this.robotModel[robotId] = {
-			robot: {
-				name: robotName
+		// Begin to unpack data
+		let statuses = []
+		for (let robot in data) {
+			let robotIds = robot.split(":") // i.e. 4:D1R00035
+			let robotId = robotIds[0]
+			let robotName = robotIds[1]
+			if (robotIds.some(item => item == null)) { // erroneous data
+				continue
 			}
-		};
+			for (let partId in data[robot]) {
+				let subStatuses = data[robot][partId] // an array of [time, code, hash]
+				if (!Array.isArray(subStatuses)) { // erroneous data
+					continue
+				}
+				// extract part-related information from pre-retrieved map
+				let partReference = this._partReferenceMap[partId];
+				if (partReference == null) {
+					Logger.warn(`PartReference finds no map for partId ${partId}`)
+				}
+				let partName = partReference == null ? null : partReference[0];
+				let label = partReference == null ? null : partReference[1];
+				let category = partReference == null ? null : partReference[2];
 
-		/** extract parts info **/
-		this.robotModel[robotId].parts = {};
-		let rParts = this.robotModel[robotId].parts;
+				subStatuses.forEach(subStatus => {
+					let time = subStatus[0]
+					let code = subStatus[1]
+
+					// map the hash value to the status event values
+					let hash = subStatus[2]
+					let statusEvtReference = this._statusEvtReferenceMap[hash]
+					if (statusEvtReference == null) {
+						Logger.warn(`StatusEvtReference finds no map for hash key ${hash}`)
+					}
+					let codeRef = statusEvtReference == null ? null : statusEvtReference[0];
+					let msg = statusEvtReference == null ? null : statusEvtReference[1];
+					let critLevel = statusEvtReference == null ? null : statusEvtReference[2];
+
+					// construct full information for each status
+					let status = [partId, category, partName, label, time, code, codeRef, msg, critLevel, robotId, robotName]
+					statuses.push(status);
+				})
+			}
+		}
+		Logger.debug(`Extracted ${statuses.length} statuses`)
+		return statuses
+	}
+
+	/**
+	 * Update internal robot model with received data (version 2)
+	 * @param  {Object} data data received from DiyaNode by websocket having the form
+	 * 		   [partId, category, partName, label, time, code, codeRef, msg, critLevel, robotId, robotName]
+	 * @deprecated robotId
+	 * @deprecated robotName
+	 * @return {[type]}		[description]
+	 */
+	Status.prototype._getRobotModelFromRecv2 = function(data) {
+		if (!Array.isArray(data)) {
+			return
+		}
+
+		if (this.robotModel == null) {
+			this.robotModel = [];
+		}
 
 		data.forEach(d => {
-			let partId = d[0];
-			let time = d[1];
-			let code = d[2];
+			let robotId = d[9]
+			let robotName = d[10]
 
-			// map the hash value to the status event values
-			let hash = d[3];
-			let statusEvtReference = this._statusEvtReferenceMap[hash]
-			if (statusEvtReference == null) {
-				Logger.warn(`StatusEvtReference finds no map for hash key ${hash}`)
+			if ([robotId, robotName].some(item => item == null)) {
+				Logger.warn(`Erroneous status data, robotId = ${robotId}, robotName = ${robotName}`)
+				return
 			}
-			let codeRef = statusEvtReference == null ? null : statusEvtReference[0];
-			let msg = statusEvtReference == null ? null : statusEvtReference[1];
-			let critLevel = statusEvtReference == null ? null : statusEvtReference[2];
 
-			// map the partId to the part reference values
-			let partReference = this._partReferenceMap[partId];
-			if (partReference == null) {
-				Logger.warn(`PartReference finds no map for partId ${partId}`)
+			if (this.robotModel[robotId] == null) {
+				this.robotModel[robotId] = {
+					robot: { name: robotName }
+				}
 			}
-			let partName = partReference == null ? null : partReference[0];
-			let label = partReference == null ? null : partReference[1];
-			let category = partReference == null ? null : partReference[2];
 
+			/** extract parts info **/
+			let partId = d[0]
+			let category = d[1];
+			let partName = d[2];
+			let label = d[3];
+			let time = d[4];
+			let code = d[5];
+			let codeRef = d[6];
+			let msg = d[7];
+			let critLevel = d[8];
+
+			if (this.robotModel[robotId].parts == null) {
+				this.robotModel[robotId].parts = {} // reset parts
+			}
+			let rParts = this.robotModel[robotId].parts
 			if (rParts[partId] == null) {
 				rParts[partId] = {};
 			}
@@ -730,8 +845,7 @@
 				codeRef: this._coder.from(codeRef)
 			};
 			/** if received list of events **/
-			if (Array.isArray(evts_tmp.code) || Array.isArray(evts_tmp.time)
-				|| Array.isArray(evts_tmp.codeRef)) {
+			if (Array.isArray(evts_tmp.code) || Array.isArray(evts_tmp.time) || Array.isArray(evts_tmp.codeRef)) {
 				if (evts_tmp.code.length === evts_tmp.codeRef.length
 					&& evts_tmp.code.length === evts_tmp.time.length) {
 					/** build list of events **/
@@ -743,10 +857,10 @@
 							codeRef: evts_tmp.codeRef[i]
 						});
 					}
+				} else {
+					Logger.error("Status:Inconsistant lengths of buffers (time/code/codeRef)");
 				}
-				else Logger.error("Status:Inconsistant lengths of buffers (time/code/codeRef)");
-			}
-			else { /** just in case, to provide backward compatibility **/
+			} else { /** just in case, to provide backward compatibility **/
 				/** set received event **/
 				rParts[partId].evts = [{
 					time: evts_tmp.time,
