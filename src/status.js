@@ -265,46 +265,6 @@ import { Stats } from 'fs';
 		return data;
 	};
 
-	// /**
- 	//  * Get all statuses within 4 days
-	//  * @param {*} robot_object 
-	//  * @param {function} callback		return callback(-1 if not found/data otherwise)
-	//  */
-	// Status.prototype._getAndUpdateMultidayStatuses = function (robot_objects, callback) {
-	// 	Logger.debug(`Status.getInitialStatus`)
-	// 	robot_objects.forEach(object => {
-	// 		if (object.RobotId == null || object.RobotName == null) {
-	// 			Logger.warn(`Multiday status request error: both RobotId and RobotName should be not null: ${object.RobotId}, ${object.RobotName}`)
-	// 			return
-	// 		}
-	// 		let req = {
-	// 			service: "status",
-	// 			func: "GetMultidayStatuses",
-	// 			obj: {
-	// 				interface: 'fr.partnering.Status',
-	// 				path: "/fr/partnering/Status"
-	// 			},
-	// 			data: {
-	// 				robot_names: [object.RobotName]
-	// 			}
-	// 		}
-	// 		let fn = (peerId, err, data) => {
-	// 			if (err != null) {
-	// 				if (typeof callback === 'function') callback(-1);
-	// 				throw new Error(err)
-	// 			}
-	// 			Logger.debug('Received multiday statuses of robot', object.RobotId, object.RobotName, data)
-	// 			// Update robotModel variable
-	// 			this._getRobotModelFromRecv2(data, object.RobotId, object.RobotName);
-	// 			if (typeof callback === 'function') {
-	// 				callback(this.robotModel)
-	// 			}
-	// 		}
-	// 		Logger.debug(`Requesting multiday statuses of robot:`, object.RobotId, object.RobotName)
-	// 		this.selector.request(req, fn)
-	// 	})
-	// };
-
 	Status.prototype._subscribeToMultidayStatusUpdate = function (robot_objects, callback) {
 		Logger.debug(`Subscribe to MultidayStatusUpdate`)
 		let subs = this.selector.subscribe({
@@ -423,20 +383,43 @@ import { Stats } from 'fs';
 			return
 		}
 
-		if (true) {
-			return
-		}
-
 		parts.forEach(part => {
-			let obj = {
+			let subs = this.selector.subscribe({
 				service: 'status',
 				func: 'StatusChanged',
 				obj: {
 					interface: 'fr.partnering.Status.Part',
 					path: objectPath
 				}
-			}
-			let fn = (peerId, err, data) => {
+			}, (peerId, err, data) => {
+				if (err != null) {
+					Logger.error("StatusSubscribe:" + err)
+					return
+				}
+				Logger.debug(`StatusChanged is called, data:`, data)
+				if (data[9] == null) data[9] = '' // empt description
+				// Update robotModel variable
+				this._getRobotModelFromRecv2(data, part.RobotId, part.RobotName);
+				if (typeof callback === 'function') {
+					callback(this.robotModel);
+				}
+			})
+			this.subscriptions.push(subs);
+		})
+
+		if (true) {
+			return
+		}
+
+
+		let subs = this.selector.subscribe({
+				service: 'status',
+				func: 'StatusChanged',
+				obj: {
+					interface: 'fr.partnering.Status',
+					path: objectPath
+				}
+			}, (peerId, err, data) => {
 				if (err != null) {
 					Logger.error("StatusSubscribe:" + err)
 					return
@@ -447,10 +430,10 @@ import { Stats } from 'fs';
 				if (typeof callback === 'function') {
 					callback(this.robotModel);
 				}
-			}
-			let subs = this.selector.subscribe(obj, fn);
-			this.subscriptions.push(subs);
-		})
+			});
+		this.subscriptions.push(subs);
+
+
 
 	// 	let subs = this.selector.subscribe({// subscribes to status changes for all parts
 	// 		service: 'status',
@@ -589,6 +572,7 @@ import { Stats } from 'fs';
 			})
 			// Sending fixed chunks to limit payload
 			.then(_ => this._subscribeToMultidayStatusUpdate(robots, callback)) // Retrieve initial statuses from the filtered robots
+			.then(_ => this._subscribeToStatusChanged(parts, callback)) // Listen to StatusChange from the parts belonging to the filtered robots
 			
 			// OK - in case sending a large chunk for each robot, payload can be large
 			// .then(_ => this._getAndUpdateMultidayStatuses(robots, callback)) // Retrieve initial statuses from the filtered robots
