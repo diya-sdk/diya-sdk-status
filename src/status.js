@@ -384,22 +384,27 @@ import { Stats } from 'fs';
 		}
 
 		parts.forEach(part => {
+			if (part.objectPath == null) {
+				return
+			}
+			Logger.debug(`Subscribing to ${part.objectPath}`)
 			let subs = this.selector.subscribe({
 				service: 'status',
 				func: 'StatusChanged',
 				obj: {
 					interface: 'fr.partnering.Status.Part',
-					path: objectPath
+					path: part.objectPath
 				}
 			}, (peerId, err, data) => {
 				if (err != null) {
 					Logger.error("StatusSubscribe:" + err)
 					return
 				}
-				Logger.debug(`StatusChanged is called, data:`, data)
+				Logger.debug(`Part's StatusChanged is called, data:`, data)
 				if (data[9] == null) data[9] = '' // empt description
 				// Update robotModel variable
-				this._getRobotModelFromRecv2(data, part.RobotId, part.RobotName);
+				// Since data is one-dimensional array, make it two-dimensional
+				this._getRobotModelFromRecv2([data], part.RobotId, part.RobotName);
 				if (typeof callback === 'function') {
 					callback(this.robotModel);
 				}
@@ -759,8 +764,9 @@ import { Stats } from 'fs';
 
 	/**
 	 * Update internal robot model with received data (version 2)
-	 * @param  {Object} data data received from DiyaNode by websocket
-	 * @return {[type]}		[description]
+	 * @param  {Object} data - two dimensional array received from DiyaNode by websocket
+	 * @param {int} robotId
+	 * @param {string} robotName
 	 */
 	Status.prototype._getRobotModelFromRecv2 = function(data, robotId, robotName) {
 		if(this.robotModel == null)
