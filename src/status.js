@@ -324,9 +324,14 @@ import { Stats } from 'fs';
 					Logger.warn("Malformed data from signal MultidayStatusUpdated:" + data)
 					return
 				}
-				let unpackedData = this._unpackRobotModels(data[0])
-				Logger.debug(`MultidayStatusUpdated is called, data:`, unpackedData)
-				this._getRobotModelFromRecv2(unpackedData) // update this.robotModel
+				let robotToStatusMap = this._unpackRobotModels(data[0])
+				Logger.debug(`MultidayStatusUpdated is called, data:`, robotToStatusMap)
+				for (var [key, value] of robotToStatusMap.entries()) {
+					let robotIds = key.split(':')
+					let robotId = robotIds[0]
+					let robotName = robotIds[1]
+					this._getRobotModelFromRecv2(value, robotId, robotName) // update this.robotModel
+				  }
 				Logger.debug(`RobotModel after unpacked:`, this.robotModel)
 				if (typeof callback === 'function') {
 					callback(this.robotModel);
@@ -711,7 +716,7 @@ import { Stats } from 'fs';
 	 *			t.DBUS_ARRAY (t.DBUS_STRUCT(t.DBUS_UINT64, t.DBUS_UINT16, t.DBUS_UINT32))
 	 *                         // time, code, hash
 	 *		)
-	 * @return {object} extracted data in form of array of [PartId, Category, PartName, Label, Time, Code, CodeRef, Msg, CritLevel, Description, RobotId, RobotName]
+	 * @return {object} extracted data in form of map of 'robotId:robotName' to array of [PartId, Category, PartName, Label, Time, Code, CodeRef, Msg, CritLevel, Description]
 	 */
 	Status.prototype._unpackRobotModels = function(data) {
 		if (data == null) {
@@ -725,14 +730,8 @@ import { Stats } from 'fs';
 			this._statusEvtReferenceMap = []
 		}
 		// Begin to unpack data
-		let statuses = []
-		for (let robot in data) {
-			let robotIds = robot.split(":") // i.e. 4:D1R00035
-			let robotId = robotIds[0]
-			let robotName = robotIds[1]
-			if (robotIds.some(item => item == null)) { // erroneous data
-				continue
-			}
+		let robotToStatusMap = new Map()
+		for (let robot in data) { // i.e. 4:D1R00035
 			for (let partId in data[robot]) {
 				let subStatuses = data[robot][partId] // an array of [time, code, hash]
 				if (!Array.isArray(subStatuses)) { // erroneous data
@@ -762,49 +761,45 @@ import { Stats } from 'fs';
 					let critLevel = statusEvtReference == null ? null : statusEvtReference[2];
 
 					// construct full information for each status
-					let status = [partId, category, partName, label, time, code, codeRef, msg, critLevel, robotId, robotName]
-					statuses.push(status);
+					let status = [partId, category, partName, label, time, code, codeRef, msg, critLevel, '']
+					if (!robotToStatusMap.has(robot)) {
+						robotToStatusMap.set(robot, [])
+					}
+					robotToStatusMap.get(robot).push(status);
 				})
 			}
 		}
-		Logger.debug(`Extracted ${statuses.length} statuses`)
-		return statuses
+		Logger.debug(`Extracted ${robotToStatusMap.length} statuses`)
+		return robotToStatusMap
 	}
 
 	/**
 	 * Update internal robot model with received data (version 2)
-	 * @param  {Object} data data received from DiyaNode by websocket having the form
-	 * 		   [partId, category, partName, label, time, code, codeRef, msg, critLevel, robotId, robotName]
-	 * @deprecated robotId
-	 * @deprecated robotName
+	 * @param  {Object} data data received from DiyaNode by websocket
 	 * @return {[type]}		[description]
 	 */
-	Status.prototype._getRobotModelFromRecv2 = function(data) {
-		if (!Array.isArray(data)) {
-			return
-		}
-
-		if (this.robotModel == null) {
+	Status.prototype._getRobotModelFromRecv2 = function(data, robotId, robotName) {
+		if(this.robotModel == null)
 			this.robotModel = [];
-		}
+
+		if(this.robotModel[robotId] != null)
+			this.robotModel[robotId].parts = {}; // reset parts
+
+		if(this.robotModel[robotId] == null)
+			this.robotModel[robotId] = {};
+
+		this.robotModel[robotId] = {
+			robot: {
+				name: robotName
+			}
+		};
+
+		/** extract parts info **/
+		this.robotModel[robotId].parts = {};
+		let rParts = this.robotModel[robotId].parts;
 
 		data.forEach(d => {
-			let robotId = d[9]
-			let robotName = d[10]
-
-			if ([robotId, robotName].some(item => item == null)) {
-				Logger.warn(`Erroneous status data, robotId = ${robotId}, robotName = ${robotName}`)
-				return
-			}
-
-			if (this.robotModel[robotId] == null) {
-				this.robotModel[robotId] = {
-					robot: { name: robotName }
-				}
-			}
-
-			/** extract parts info **/
-			let partId = d[0]
+			let partId = d[0];
 			let category = d[1];
 			let partName = d[2];
 			let label = d[3];
@@ -813,18 +808,15 @@ import { Stats } from 'fs';
 			let codeRef = d[6];
 			let msg = d[7];
 			let critLevel = d[8];
+			let description = d[9];
 
-			if (this.robotModel[robotId].parts == null) {
-				this.robotModel[robotId].parts = {} // reset parts
-			}
-			let rParts = this.robotModel[robotId].parts
 			if (rParts[partId] == null) {
 				rParts[partId] = {};
 			}
 			/* update part category */
 			rParts[partId].category = category;
 			/* update part name */
-			rParts[partId].name = partName == null ? null : partName.toLowerCase();
+			rParts[partId].name = partName.toLowerCase();
 			/* update part label */
 			rParts[partId].label = label;
 
@@ -837,7 +829,7 @@ import { Stats } from 'fs';
 				rParts[partId].errorList[codeRef] = {
 					msg: msg,
 					critLevel: critLevel,
-					description: null
+					description: description
 				};
 			let evts_tmp = {
 				time: this._coder.from(time),
@@ -845,7 +837,8 @@ import { Stats } from 'fs';
 				codeRef: this._coder.from(codeRef)
 			};
 			/** if received list of events **/
-			if (Array.isArray(evts_tmp.code) || Array.isArray(evts_tmp.time) || Array.isArray(evts_tmp.codeRef)) {
+			if (Array.isArray(evts_tmp.code) || Array.isArray(evts_tmp.time)
+				|| Array.isArray(evts_tmp.codeRef)) {
 				if (evts_tmp.code.length === evts_tmp.codeRef.length
 					&& evts_tmp.code.length === evts_tmp.time.length) {
 					/** build list of events **/
@@ -857,10 +850,10 @@ import { Stats } from 'fs';
 							codeRef: evts_tmp.codeRef[i]
 						});
 					}
-				} else {
-					Logger.error("Status:Inconsistant lengths of buffers (time/code/codeRef)");
 				}
-			} else { /** just in case, to provide backward compatibility **/
+				else Logger.error("Status:Inconsistant lengths of buffers (time/code/codeRef)");
+			}
+			else { /** just in case, to provide backward compatibility **/
 				/** set received event **/
 				rParts[partId].evts = [{
 					time: evts_tmp.time,
