@@ -1,5 +1,3 @@
-import { Stats } from 'fs';
-
 /*
  * Copyright : Partnering 3.0 (2007-2016)
  * Author : Sylvain Mahé <sylvain.mahe@partnering.fr>
