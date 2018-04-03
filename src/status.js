@@ -49,7 +49,7 @@ import { Stats } from 'fs';
 	/////////////////// Logging utility methods //////////////////
 	//////////////////////////////////////////////////////////////
 
-	var DEBUG = true;
+	var DEBUG = false;
 	var Logger = {
 		log: function(message){
 			if(DEBUG) console.log(message);
@@ -275,31 +275,30 @@ import { Stats } from 'fs';
 					path: "/fr/partnering/Status"
 				}
 			}, (peerId, err, data) => {
-				Logger.debug(`RECEIVED SUBSCRIPTION`, data)
 				if (err != null) {
-					Logger.error("StatusSubscribe:" + err)
+					Logger.error("Multiday status subscription: error", err)
 					return
 				}
 				if (!Array.isArray(data)) {
-					Logger.warn("Malformed data from signal MultidayStatusUpdated:" + data)
+					Logger.warn("Multiday status subscription: malformed data", data)
 					return
 				}
 				let robotToStatusMap = this._unpackRobotModels(data[0])
-				Logger.debug(`MultidayStatusUpdated is called, data:`, robotToStatusMap)
+				Logger.debug(`Multiday status subscription data after unpacking:`, robotToStatusMap)
 				for (var [key, value] of robotToStatusMap.entries()) {
 					let robotIds = key.split(':')
 					let robotId = robotIds[0]
 					let robotName = robotIds[1]
 					this._getRobotModelFromRecv2(value, robotId, robotName) // update this.robotModel
 				  }
-				Logger.debug(`RobotModel after unpacked:`, this.robotModel)
+				Logger.debug(`RobotModel after unpacking:`, this.robotModel)
 				if (typeof callback === 'function') {
 					callback(this.robotModel);
 				}
 		})
 		this.subscriptions.push(subs)
 
-		Logger.debug(`Send request for MultidayStatusUpdate`, robotNames)
+		Logger.debug(`Triggering MultidayStatusUpdate for robots`, robotNames)
 		let robotNames = robot_objects.map(robot => robot.RobotName)
 		this.selector.request({
 				service: "status",
@@ -314,11 +313,11 @@ import { Stats } from 'fs';
 			}, (peerId, err, data) => {
 				// Do nothing since the server should reponse back via signals
 				if (err != null) {
-					Logger.warn(`Cannot connect to status service: ${err}`)
+					Logger.warn(`Multiday status trigger: error`, err)
 					if (typeof callback === 'function') callback(-1);
 					throw new Error(err)
 				}
-		})
+			})
 	}
 
 	/**
@@ -335,7 +334,7 @@ import { Stats } from 'fs';
 						path: '/fr/partnering/Status'
 					}
 				}, (peerId, err, data) => {
-					Logger.debug(`PartReferenceMap, err`, data, err)
+					Logger.debug(`PartReferenceMap response`, data, err)
 					if (data == null) {
 						data = []
 					}
@@ -361,7 +360,7 @@ import { Stats } from 'fs';
 						path: '/fr/partnering/Status'
 					}
 				}, (peerId, err, data) => {
-					Logger.debug(`StatusEvtReferenceMap, err`, data, err)
+					Logger.debug(`StatusEvtReferenceMap response`, data, err)
 					if (data == null) {
 						data = []
 					}
@@ -385,6 +384,7 @@ import { Stats } from 'fs';
 
 		parts.forEach(part => {
 			if (part.objectPath == null) {
+				Logger.warn('Subscribe to StatusChanged: input error', part)
 				return
 			}
 			Logger.debug(`Subscribing to ${part.objectPath}`)
@@ -401,7 +401,7 @@ import { Stats } from 'fs';
 					return
 				}
 				Logger.debug(`Part's StatusChanged is called, data:`, data)
-				if (data[9] == null) data[9] = '' // empt description
+				if (data[9] == null) data[9] = '' // empty description
 				// Update robotModel variable
 				// Since data is one-dimensional array, make it two-dimensional
 				this._getRobotModelFromRecv2([data], part.RobotId, part.RobotName);
@@ -411,56 +411,6 @@ import { Stats } from 'fs';
 			})
 			this.subscriptions.push(subs);
 		})
-
-		if (true) {
-			return
-		}
-
-
-		let subs = this.selector.subscribe({
-				service: 'status',
-				func: 'StatusChanged',
-				obj: {
-					interface: 'fr.partnering.Status',
-					path: objectPath
-				}
-			}, (peerId, err, data) => {
-				if (err != null) {
-					Logger.error("StatusSubscribe:" + err)
-					return
-				}
-				Logger.debug(`StatusChanged is called, data:`, data)
-				// Update robotModel variable
-				this._getRobotModelFromRecv2(data, part.RobotId, part.RobotName);
-				if (typeof callback === 'function') {
-					callback(this.robotModel);
-				}
-			});
-		this.subscriptions.push(subs);
-
-
-
-	// 	let subs = this.selector.subscribe({// subscribes to status changes for all parts
-	// 		service: 'status',
-	// 		func: 'StatusChanged',
-	// 		obj: {
-	// 				interface: 'fr.partnering.Status.Part',
-	// 				path: objectPath
-	// 		},
-	// 		data: robotNames
-	// }, (peerId, err, data) => {
-	// 		if (err != null) {
-	// 				Logger.error("StatusSubscribe:" + err);
-	// 		} else {
-	// 				sendData[0] = data;
-	// 				this._getRobotModelFromRecv2(sendData, robotId, robotName);
-	// 				if (typeof callback === 'function') {
-	// 						callback(this.robotModel, peerId);
-	// 				}
-	// 		}
-	// });
-	// this.subscriptions.push(subs);
-
 	}
 
 	/**
@@ -572,75 +522,11 @@ import { Stats } from 'fs';
 					part.RobotId = robotMap.get(part.RobotName)
 				})
 				
-				Logger.debug('meshed robots', robots)
-				Logger.debug('meshed parts', parts)
+				Logger.debug('meshed robots to be displayed', robots)
+				Logger.debug('meshed parts to be subscribed to', parts)
 			})
-			// Sending fixed chunks to limit payload
 			.then(_ => this._subscribeToMultidayStatusUpdate(robots, callback)) // Retrieve initial statuses from the filtered robots
 			.then(_ => this._subscribeToStatusChanged(parts, callback)) // Listen to StatusChange from the parts belonging to the filtered robots
-			
-			// OK - in case sending a large chunk for each robot, payload can be large
-			// .then(_ => this._getAndUpdateMultidayStatuses(robots, callback)) // Retrieve initial statuses from the filtered robots
-			// .then(_ => this._subscribeToStatusChanged(parts, callback)) // Listen to StatusChange from the parts belonging to the filtered robots
-
-		if (true) return
-
-		// // Subscribe to signals
-
-		// let sendData = [];
-		// let robotIds = [];
-		// return Promise.try(_ => {
-		// 	let req = this.selector.request({
-		// 		service: 'status',
-		// 		func: 'GetManagedObjects',
-		// 		obj: {
-		// 			interface: 'org.freedesktop.DBus.ObjectManager',
-		// 		}
-		// 	}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
-		// 		let robotName = '';
-		// 		let robotId = 1;
-
-		// 		Logger.debug(`Status.GetManagedObjects: objData = `)
-		// 		Logger.debug(objData)
-
-		// 		for (let objectPath in objData) {
-		// 			if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
-		// 				robotName = objData[objectPath]['fr.partnering.Status.Robot'].RobotName;
-		// 				robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId;
-		// 				robotIds[robotName] = robotId;
-		// 				this._getInitialStatus(robotId, robotName, function (model) {
-		// 					callback(model, peerId);
-		// 				})
-		// 			}
-		// 			if (objData[objectPath]['fr.partnering.Status.Part'] != null) {
-		// 				let subs = this.selector.subscribe({// subscribes to status changes for all parts
-		// 					service: 'status',
-		// 					func: 'StatusChanged',
-		// 					obj: {
-		// 						interface: 'fr.partnering.Status.Part',
-		// 						path: objectPath
-		// 					},
-		// 					data: robotNames
-		// 				}, (peerId, err, data) => {
-		// 					if (err != null) {
-		// 						Logger.error("StatusSubscribe:" + err);
-		// 					} else {
-		// 						Logger.debug(`StatusChanged is called`)
-		// 						sendData[0] = data;
-		// 						this._getRobotModelFromRecv2(sendData, robotId, robotName);
-		// 						if (typeof callback === 'function') {
-		// 							callback(this.robotModel, peerId);
-		// 						}
-		// 					}
-		// 				});
-		// 				this.subscriptions.push(subs);
-		// 			}
-		// 		}
-		// 	})
-		// }).catch(err => {
-		// 	Logger.error(err);
-		// })
-
 	};
 
 	/**
@@ -758,7 +644,6 @@ import { Stats } from 'fs';
 				})
 			}
 		}
-		Logger.debug(`Extracted ${robotToStatusMap.length} statuses`)
 		return robotToStatusMap
 	}
 
@@ -844,12 +729,15 @@ import { Stats } from 'fs';
 				else Logger.error("Status:Inconsistant lengths of buffers (time/code/codeRef)");
 			}
 			else { /** just in case, to provide backward compatibility **/
-				/** set received event **/
-				rParts[partId].evts = [{
+				/** set received events **/
+				if (rParts[partId].evts == null) {
+					rParts[partId].evts = []
+				}
+				rParts[partId].evts.push({
 					time: evts_tmp.time,
 					code: evts_tmp.code,
 					codeRef: evts_tmp.codeRef
-				}];
+				});
 			}
 		})
 	};
