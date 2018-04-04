@@ -47,10 +47,18 @@
 	/////////////////// Logging utility methods //////////////////
 	//////////////////////////////////////////////////////////////
 
-	var DEBUG = true;
+	var DEBUG = false;
 	var Logger = {
 		log: function(message){
 			if(DEBUG) console.log(message);
+		},
+
+		debug: function(message, ...args){
+			if(DEBUG) console.log(message, ...args);
+		},
+
+		warn: function(message){
+			if(DEBUG) console.warn(message);
 		},
 
 		error: function(message){
@@ -69,6 +77,7 @@
 		/** model of robot : available parts and status **/
 		this.robotModel = [];
 		this._robotModelInit = false;
+		this._partReferenceMap = [];
 
 		/*** structure of data config ***
 			 criteria :
@@ -254,62 +263,268 @@
 		return data;
 	};
 
+	Status.prototype._subscribeToMultidayStatusUpdate = function (robot_objects, callback) {
+		Logger.debug(`Subscribe to MultidayStatusUpdate`)
+		let subs = this.selector.subscribe({
+				service: 'status',
+				func: 'MultidayStatusUpdated',
+				obj: {
+					interface: 'fr.partnering.Status',
+					path: "/fr/partnering/Status"
+				}
+			}, (peerId, err, data) => {
+				if (err != null) {
+					Logger.error("Multiday status subscription: error", err)
+					return
+				}
+				if (!Array.isArray(data)) {
+					Logger.warn("Multiday status subscription: malformed data", data)
+					return
+				}
+				let robotToStatusMap = this._unpackRobotModels(data[0])
+				Logger.debug(`Multiday status subscription data after unpacking:`, robotToStatusMap)
+				for (var [key, value] of robotToStatusMap.entries()) {
+					let robotIds = key.split(':')
+					let robotId = robotIds[0]
+					let robotName = robotIds[1]
+					this._getRobotModelFromRecv2(value, robotId, robotName) // update this.robotModel
+				  }
+				Logger.debug(`RobotModel after unpacking:`, this.robotModel)
+				if (typeof callback === 'function') {
+					callback(this.robotModel);
+				}
+		})
+		this.subscriptions.push(subs)
+
+		Logger.debug(`Triggering MultidayStatusUpdate for robots`, robotNames)
+		let robotNames = robot_objects.map(robot => robot.RobotName)
+		this.selector.request({
+				service: "status",
+				func: "TriggerMultidayStatuses",
+				obj: {
+					interface: 'fr.partnering.Status',
+					path: "/fr/partnering/Status"
+				},
+				data: {
+					robot_names: robotNames
+				}
+			}, (peerId, err, data) => {
+				// Do nothing since the server should reponse back via signals
+				if (err != null) {
+					Logger.warn(`Multiday status trigger: error`, err)
+					if (typeof callback === 'function') callback(-1);
+					throw new Error(err)
+				}
+			})
+	}
+
 	/**
+	 * Get 'Parts' reference map to reduce status payload. Duplicated contents in status are stored in the map.
+	 */
+	Status.prototype._getPartReferenceMap = function () {
+		if (this._partReferenceMap == null || this._partReferenceMap.length == 0) {
+			return new Promise((resolve, reject) => {
+				this.selector.request({
+					service: 'Status',
+					func: 'GetPartReferenceMap',
+					obj: {
+						interface: 'fr.partnering.Status',
+						path: '/fr/partnering/Status'
+					}
+				}, (peerId, err, data) => {
+					Logger.debug(`PartReferenceMap response`, data, err)
+					if (data == null) {
+						data = []
+					}
+					this._partReferenceMap = data
+					resolve() // returns a map of partid to its properties
+				})
+			})
+		}
+		Logger.debug('PartReferenceMap already exists, no need to request. Number of parts:', this._partReferenceMap.length)
+	};
+
+	/**
+	 * Get 'StatusEvts' reference map to reduce status payload. Duplicated contents in status are stored in the map.
+	 */
+	Status.prototype._getStatusEvtReferenceMap = function () {
+		if (this._statusEvtReferenceMap == null || this._statusEvtReferenceMap.length == 0) {
+			return new Promise((resolve, reject) => {
+				this.selector.request({
+					service: 'Status',
+					func: 'GetStatusEvtReferenceMap',
+					obj: {
+						interface: 'fr.partnering.Status',
+						path: '/fr/partnering/Status'
+					}
+				}, (peerId, err, data) => {
+					Logger.debug(`StatusEvtReferenceMap response`, data, err)
+					if (data == null) {
+						data = []
+					}
+					this._statusEvtReferenceMap = data
+					resolve() // returns a map of partid to its properties
+				})
+			})
+		}
+		Logger.debug('StatusEvtReferenceMap already exists, no need to request. Number of parts:', this._statusEvtReferenceMap.length)
+	};
+
+	/**
+	 * Subscribes to status changes for all parts
+	 * @param {*} parts 
+	 * @param {*} callback 
+	 */
+	Status.prototype._subscribeToStatusChanged = function (parts, callback) {
+		if (parts == null) {
+			return
+		}
+
+		parts.forEach(part => {
+			if (part.objectPath == null) {
+				Logger.warn('Subscribe to StatusChanged: input error', part)
+				return
+			}
+			Logger.debug(`Subscribing to ${part.objectPath}`)
+			let subs = this.selector.subscribe({
+				service: 'status',
+				func: 'StatusChanged',
+				obj: {
+					interface: 'fr.partnering.Status.Part',
+					path: part.objectPath
+				}
+			}, (peerId, err, data) => {
+				if (err != null) {
+					Logger.error("StatusSubscribe:" + err)
+					return
+				}
+				Logger.debug(`Part's StatusChanged is called, data:`, data)
+				if (data[9] == null) data[9] = '' // empty description
+				// Update robotModel variable
+				// Since data is one-dimensional array, make it two-dimensional
+				this._getRobotModelFromRecv2([data], part.RobotId, part.RobotName);
+				if (typeof callback === 'function') {
+					callback(this.robotModel);
+				}
+			})
+			this.subscriptions.push(subs);
+		})
+	}
+
+	/**
+	 * Query for initial statuses
 	 * Subscribe to error/status updates
 	 */
 	Status.prototype.watch = function (robotNames, callback) {
+		Logger.debug(`Status.watch: robotNames`, robotNames)
+
 		this.selector.setMaxListeners(0);
 		this.selector._connection.setMaxListeners(0);
-		let sendData = [];
-		let robotIds = [];
-		return Promise.try(_ => {
-			let req = this.selector.request({
+
+		// Promise to retrieve list of paired neighbors, i.e. all neighbor robots in the same mesh network
+		let getNeighbors = new Promise((resolve, reject) => {
+			this.selector.request({
+				service: 'MeshNetwork',
+				func: 'ListNeighbors',
+			}, (peerId, err, neighbors) => {
+				Logger.debug(`neighbors, err`, neighbors, err)
+				if (err != null) {
+					reject(err)
+				}
+				// This only returns the list of physical devices paired into the mesh network, the diya-server instance is not already included in the list
+				if (neighbors == null) {
+					neighbors = []
+				}
+				resolve(neighbors) // returns a array of neighbor object, each object is an array of [robot-name, address, bool]
+			})
+		})
+
+		// Promise to retrieve all objects (robots, parts) exposed in DBus by diya-node-status
+		let getRobotsAndParts = new Promise((resolve, reject) => {
+			this.selector.request({
 				service: 'status',
 				func: 'GetManagedObjects',
 				obj: {
 					interface: 'org.freedesktop.DBus.ObjectManager',
 				}
 			}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
-				let robotName = '';
-				let robotId = 1;
-				for (let objectPath in objData) {
-					if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
-						robotName = objData[objectPath]['fr.partnering.Status.Robot'].RobotName;
-						robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId;
-						robotIds[robotName] = robotId;
-						this.getAllStatuses(robotName, function (model) {
-							callback(model, peerId);
-						})
-					}
-					if (objData[objectPath]['fr.partnering.Status.Part'] != null) {
-						let subs = this.selector.subscribe({// subscribes to status changes for all parts
-							service: 'status',
-							func: 'StatusChanged',
-							obj: {
-								interface: 'fr.partnering.Status.Part',
-								path: objectPath
-							},
-							data: robotNames
-						}, (peerId, err, data) => {
-							if (err != null) {
-								Logger.error("StatusSubscribe:" + err);
-							} else {
-								sendData[0] = data;
-								this._getRobotModelFromRecv2(sendData, robotId, robotName);
-								if (typeof callback === 'function') {
-									callback(this.robotModel, peerId);
-								}
-							}
-						});
-						this.subscriptions.push(subs);
-					}
+				if (err != null || objData == null) {
+					reject(err)
 				}
+				resolve(objData) // returns a map that links the object path to its corresponding interface
 			})
-		}).catch(err => {
-			Logger.error(err);
 		})
 
+		let robotIface = 'fr.partnering.Status.Robot'
+		let partIface = 'fr.partnering.Status.Part'
 
+		// js objects of robots and parts
+		let robotMap = new Map() // map robot name to id
+		let robots = [] // list of robot objects
+		let parts = [] // list of part object
+		let meshedRobotNames = [] // list of names of robots and diya-server in the mesh network
+
+		// Retrieve reference map of keys and values in order to reduce payload for status requests
+		return Promise.try(_ => this._getPartReferenceMap())
+			.then(_ => this._getStatusEvtReferenceMap())
+			.then(_ => getNeighbors)
+			.then(ret => {
+				if (ret == null || !Array.isArray(ret)) {
+					meshedRobotNames = []
+				}
+				let hostname = this.selector._connection._self
+				meshedRobotNames = ret.map(r => r[0]) // we only keep the robot names
+				if (!meshedRobotNames.includes(hostname)) {
+					meshedRobotNames.push(hostname) // add hostname, i.e. the diya-server, which is not in the list of neighbors
+				}
+			})
+			.then(_ => getRobotsAndParts)
+			.then(ret => {
+				for (let objectPath in ret) {
+					// the object obtained from the object path
+					let object = ret[objectPath]
+
+					// if the return object is of a robot in the list of neighbors, or of the diya-server, retrieve all ofits relevant statuses
+					if (object.hasOwnProperty(robotIface)) { // this is robot object
+						robots.push(object[robotIface])
+					}
+
+					// if the return object is of a part, listen to signal StatusChanged of the part
+					if (object.hasOwnProperty(partIface)) { // this is a part object
+						let part = object[partIface]
+						part.objectPath = objectPath
+						part.RobotName = objectPath.split('/')[5] /* /fr/partnering/Status/Robots/B1R00037/Parts/voct */
+						parts.push(part)
+					}
+				}
+
+				Logger.debug('robots', robots)
+				Logger.debug('parts', parts)
+
+				// filer and keep the diya-server and the robots that are only in the same mesh networks
+				robots = robots.filter(robot => meshedRobotNames.includes(robot.RobotName)) // only keeps robots that are neighbors (i.e. in the same mesh network)
+
+				// filter parts that belongs to the robot in the mesh network (including the diya-server)
+				parts = parts.filter(part => meshedRobotNames.includes(part.RobotName)) // only keeps parts belonging to neighbors (i.e. in the same mesh network)
+
+				// create map of robot name to id for setting RobotId to paths
+				robots.forEach(robot => {
+					if (robotMap.has(robot.RobotName)) {
+						return
+					}
+					robotMap.set(robot.RobotName, robot.RobotId)
+				})
+
+				// set RobotId to each part
+				parts.forEach(part => {
+					part.RobotId = robotMap.get(part.RobotName)
+				})
+				
+				Logger.debug('meshed robots to be displayed', robots)
+				Logger.debug('meshed parts to be subscribed to', parts)
+			})
+			.then(_ => this._subscribeToMultidayStatusUpdate(robots, callback)) // Retrieve initial statuses from the filtered robots
+			.then(_ => this._subscribeToStatusChanged(parts, callback)) // Listen to StatusChange from the parts belonging to the filtered robots
 	};
 
 	/**
@@ -364,11 +579,77 @@
 		})
 	};
 
+	/**
+	 * Restore zipped data from signal MultidayStatusUpdated to a compliant state for use in function {@link _getRobotModelFromRecv2}
+	 * @param {object} data - zipped data received from signal MultidayStatusUpdated, this data is compressed to reduce memory footprint
+	 * t.DBUS_DICT (
+	 *		t.DBUS_STRING,     // robot info i.e. 4:D1R00035
+	 *		t.DBUS_DICT (
+	 *			t.DBUS_STRING, // partId
+	 *			t.DBUS_ARRAY (t.DBUS_STRUCT(t.DBUS_UINT64, t.DBUS_UINT16, t.DBUS_UINT32))
+	 *                         // time, code, hash
+	 *		)
+	 * @return {object} extracted data in form of map of 'robotId:robotName' to array of [PartId, Category, PartName, Label, Time, Code, CodeRef, Msg, CritLevel, Description]
+	 */
+	Status.prototype._unpackRobotModels = function(data) {
+		if (data == null) {
+			return
+		}
+		// These two reference map should have been retrieved at initial connection
+		if (this._partReferenceMap == null) {
+			this._partReferenceMap = []
+		}
+		if (this._statusEvtReferenceMap == null) {
+			this._statusEvtReferenceMap = []
+		}
+		// Begin to unpack data
+		let robotToStatusMap = new Map()
+		for (let robot in data) { // i.e. 4:D1R00035
+			for (let partId in data[robot]) {
+				let subStatuses = data[robot][partId] // an array of [time, code, hash]
+				if (!Array.isArray(subStatuses)) { // erroneous data
+					continue
+				}
+				// extract part-related information from pre-retrieved map
+				let partReference = this._partReferenceMap[partId];
+				if (partReference == null) {
+					Logger.warn(`PartReference finds no map for partId ${partId}`)
+				}
+				let partName = partReference == null ? null : partReference[0];
+				let label = partReference == null ? null : partReference[1];
+				let category = partReference == null ? null : partReference[2];
+
+				subStatuses.forEach(subStatus => {
+					let time = subStatus[0]
+					let code = subStatus[1]
+
+					// map the hash value to the status event values
+					let hash = subStatus[2]
+					let statusEvtReference = this._statusEvtReferenceMap[hash]
+					if (statusEvtReference == null) {
+						Logger.warn(`StatusEvtReference finds no map for hash key ${hash}`)
+					}
+					let codeRef = statusEvtReference == null ? null : statusEvtReference[0];
+					let msg = statusEvtReference == null ? null : statusEvtReference[1];
+					let critLevel = statusEvtReference == null ? null : statusEvtReference[2];
+
+					// construct full information for each status
+					let status = [partId, category, partName, label, time, code, codeRef, msg, critLevel, '']
+					if (!robotToStatusMap.has(robot)) {
+						robotToStatusMap.set(robot, [])
+					}
+					robotToStatusMap.get(robot).push(status);
+				})
+			}
+		}
+		return robotToStatusMap
+	}
 
 	/**
 	 * Update internal robot model with received data (version 2)
-	 * @param  {Object} data data received from DiyaNode by websocket
-	 * @return {[type]}		[description]
+	 * @param  {Object} data - two dimensional array received from DiyaNode by websocket
+	 * @param {int} robotId
+	 * @param {string} robotName
 	 */
 	Status.prototype._getRobotModelFromRecv2 = function(data, robotId, robotName) {
 		if(this.robotModel == null)
@@ -446,12 +727,15 @@
 				else Logger.error("Status:Inconsistant lengths of buffers (time/code/codeRef)");
 			}
 			else { /** just in case, to provide backward compatibility **/
-				/** set received event **/
-				rParts[partId].evts = [{
+				/** set received events **/
+				if (rParts[partId].evts == null) {
+					rParts[partId].evts = []
+				}
+				rParts[partId].evts.push({
 					time: evts_tmp.time,
 					code: evts_tmp.code,
 					codeRef: evts_tmp.codeRef
-				}];
+				});
 			}
 		})
 	};
@@ -539,52 +823,6 @@
 			})
 		}).catch(err => {
 			Logger.error(err)
-		})
-	};
-
-	/**
-	 * Get all status
-	 * @param robotName to get status
-	 * @param partName 	to get status
-	 * @param callback		return callback(-1 if not found/data otherwise)
-	 * @param _full 	more data about status
-	 */
-	Status.prototype.getAllStatuses = function (robotName, callback) {
-		let req = this.selector.request({
-			service: 'status',
-			func: 'GetManagedObjects',
-			obj: {
-				interface: 'org.freedesktop.DBus.ObjectManager',
-			}
-		}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
-			let objectPath = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
-			if (objData[objectPath] != null) {
-				if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
-					let robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId
-					//var full = _full || false;
-					this.selector.request({
-						service: "status",
-						func: "GetAllParts",
-						obj: {
-							interface: 'fr.partnering.Status.Robot',
-							path: objectPath
-						}
-					}, (peerId, err, data) => {
-						if (err != null) {
-							if (typeof callback === 'function') callback(-1);
-							throw new Error(err)
-						}
-						else {
-							this._getRobotModelFromRecv2(data, robotId, robotName);
-							if (typeof callback === 'function') callback(this.robotModel);
-						}
-					});
-				} else {
-					Logger.error("Interface fr.partnering.Status.Robot doesn't exist!")
-				}
-			} else {
-				Logger.error("ObjectPath " + objectPath + " doesn't exist!")
-			}
 		})
 	};
 
