@@ -270,6 +270,8 @@
 					interface: 'org.freedesktop.DBus.ObjectManager',
 				}
 			}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
+				if (err != null)
+					return Logger.error(err);
 				let robotName = '';
 				let robotId = 1;
 				for (let objectPath in objData) {
@@ -291,14 +293,12 @@
 							},
 							data: robotNames
 						}, (peerId, err, data) => {
-							if (err != null) {
+							if (err != null)
 								Logger.error("StatusSubscribe:" + err);
-							} else {
-								sendData[0] = data;
-								this._getRobotModelFromRecv2(sendData, robotId, robotName);
-								if (typeof callback === 'function') {
-									callback(this.robotModel, peerId);
-								}
+							sendData[0] = data;
+							this._getRobotModelFromRecv2(sendData, robotId, robotName);
+							if (typeof callback === 'function') {
+								callback(this.robotModel, peerId);
 							}
 						});
 						this.subscriptions.push(subs);
@@ -515,7 +515,8 @@
 					interface: 'org.freedesktop.DBus.ObjectManager',
 				}
 			}, (peerId, err, objData) => {
-
+				if (err != null)
+					return Logger.error(err);
 				let objectPathRobot = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
 				let objectPathPart = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-") + "/Parts/" + partName;
 				let robotId = objData[objectPathRobot]['fr.partnering.Status.Robot'].RobotId
@@ -527,6 +528,8 @@
 						path: objectPathPart
 					}
 				}, (peerId, err, data) => {
+					if (err != null)
+						return Logger.error(err);
 					sendData.push(data)
 					this._getRobotModelFromRecv2(sendData, robotId, robotName);
 					if (err != null) {
@@ -557,6 +560,8 @@
 				interface: 'org.freedesktop.DBus.ObjectManager',
 			}
 		}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
+			if (err != null || objData === null)
+				return Logger.error(err);
 			let objectPath = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
 			if (objData[objectPath] != null) {
 				if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
@@ -572,7 +577,7 @@
 					}, (peerId, err, data) => {
 						if (err != null) {
 							if (typeof callback === 'function') callback(-1);
-							throw new Error(err)
+							return Logger.error(err);
 						}
 						else {
 							this._getRobotModelFromRecv2(data, robotId, robotName);
