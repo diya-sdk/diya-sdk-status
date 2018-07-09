@@ -270,43 +270,38 @@
 					interface: 'org.freedesktop.DBus.ObjectManager',
 				}
 			}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
-				if (err != null) {
-					Logger.error(err);
-				}
-				else {
-					let robotName = '';
-					let robotId = 1;
-					for (let objectPath in objData) {
-						if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
-							robotName = objData[objectPath]['fr.partnering.Status.Robot'].RobotName;
-							robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId;
-							robotIds[robotName] = robotId;
-							this.getAllStatuses(robotName, function (model) {
-								callback(model, peerId);
-							})
-						}
-						if (objData[objectPath]['fr.partnering.Status.Part'] != null) {
-							let subs = this.selector.subscribe({// subscribes to status changes for all parts
-								service: 'status',
-								func: 'StatusChanged',
-								obj: {
-									interface: 'fr.partnering.Status.Part',
-									path: objectPath
-								},
-								data: robotNames
-							}, (peerId, err, data) => {
-								if (err != null) {
-									Logger.error("StatusSubscribe:" + err);
-								} else {
-									sendData[0] = data;
-									this._getRobotModelFromRecv2(sendData, robotId, robotName);
-									if (typeof callback === 'function') {
-										callback(this.robotModel, peerId);
-									}
-								}
-							});
-							this.subscriptions.push(subs);
-						}
+				if (err != null)
+					return Logger.error(err);
+				let robotName = '';
+				let robotId = 1;
+				for (let objectPath in objData) {
+					if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
+						robotName = objData[objectPath]['fr.partnering.Status.Robot'].RobotName;
+						robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId;
+						robotIds[robotName] = robotId;
+						this.getAllStatuses(robotName, function (model) {
+							callback(model, peerId);
+						})
+					}
+					if (objData[objectPath]['fr.partnering.Status.Part'] != null) {
+						let subs = this.selector.subscribe({// subscribes to status changes for all parts
+							service: 'status',
+							func: 'StatusChanged',
+							obj: {
+								interface: 'fr.partnering.Status.Part',
+								path: objectPath
+							},
+							data: robotNames
+						}, (peerId, err, data) => {
+							if (err != null)
+								Logger.error("StatusSubscribe:" + err);
+							sendData[0] = data;
+							this._getRobotModelFromRecv2(sendData, robotId, robotName);
+							if (typeof callback === 'function') {
+								callback(this.robotModel, peerId);
+							}
+						});
+						this.subscriptions.push(subs);
 					}
 				}
 			})
@@ -520,37 +515,30 @@
 					interface: 'org.freedesktop.DBus.ObjectManager',
 				}
 			}, (peerId, err, objData) => {
-				if (err != null) {
-					Logger.error(err);
-				}
-				else {
-
-					let objectPathRobot = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
-					let objectPathPart = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-") + "/Parts/" + partName;
-					let robotId = objData[objectPathRobot]['fr.partnering.Status.Robot'].RobotId
-					this.selector.request({
-						service: "status",
-						func: "GetPart",
-						obj: {
-							interface: 'fr.partnering.Status.Part',
-							path: objectPathPart
-						}
-					}, (peerId, err, data) => {
-						if (err != null) {
-							Logger.error(err);
-						}
-						else {
-							sendData.push(data)
-							this._getRobotModelFromRecv2(sendData, robotId, robotName);
-							if (err != null) {
-								if (typeof callback === 'function') callback(-1);
-							}
-							else {
-								if (typeof callback === 'function') callback(this.robotModel);
-							}
-						}
-					});
-				}
+				if (err != null)
+					return Logger.error(err);
+				let objectPathRobot = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
+				let objectPathPart = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-") + "/Parts/" + partName;
+				let robotId = objData[objectPathRobot]['fr.partnering.Status.Robot'].RobotId
+				this.selector.request({
+					service: "status",
+					func: "GetPart",
+					obj: {
+						interface: 'fr.partnering.Status.Part',
+						path: objectPathPart
+					}
+				}, (peerId, err, data) => {
+					if (err != null)
+						return Logger.error(err);
+					sendData.push(data)
+					this._getRobotModelFromRecv2(sendData, robotId, robotName);
+					if (err != null) {
+						if (typeof callback === 'function') callback(-1);
+					}
+					else {
+						if (typeof callback === 'function') callback(this.robotModel);
+					}
+				});
 			})
 		}).catch(err => {
 			Logger.error(err)
@@ -572,38 +560,35 @@
 				interface: 'org.freedesktop.DBus.ObjectManager',
 			}
 		}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
-			if (err != null || objData === null) {
-				Logger.error(err);
-			}
-			else {
-				let objectPath = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
-				if (objData[objectPath] != null) {
-					if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
-						let robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId
-						//var full = _full || false;
-						this.selector.request({
-							service: "status",
-							func: "GetAllParts",
-							obj: {
-								interface: 'fr.partnering.Status.Robot',
-								path: objectPath
-							}
-						}, (peerId, err, data) => {
-							if (err != null) {
-								if (typeof callback === 'function') callback(-1);
-								Logger.error(err);
-							}
-							else {
-								this._getRobotModelFromRecv2(data, robotId, robotName);
-								if (typeof callback === 'function') callback(this.robotModel);
-							}
-						});
-					} else {
-						Logger.error("Interface fr.partnering.Status.Robot doesn't exist!")
-					}
+			if (err != null || objData === null)
+				return Logger.error(err);
+			let objectPath = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
+			if (objData[objectPath] != null) {
+				if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
+					let robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId
+					//var full = _full || false;
+					this.selector.request({
+						service: "status",
+						func: "GetAllParts",
+						obj: {
+							interface: 'fr.partnering.Status.Robot',
+							path: objectPath
+						}
+					}, (peerId, err, data) => {
+						if (err != null) {
+							if (typeof callback === 'function') callback(-1);
+							return Logger.error(err);
+						}
+						else {
+							this._getRobotModelFromRecv2(data, robotId, robotName);
+							if (typeof callback === 'function') callback(this.robotModel);
+						}
+					});
 				} else {
-					Logger.error("ObjectPath " + objectPath + " doesn't exist!")
+					Logger.error("Interface fr.partnering.Status.Robot doesn't exist!")
 				}
+			} else {
+				Logger.error("ObjectPath " + objectPath + " doesn't exist!")
 			}
 		})
 	};
