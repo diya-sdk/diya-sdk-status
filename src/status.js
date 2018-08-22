@@ -100,6 +100,8 @@
 			status: null
 		};
 
+
+
 		return this;
 	};
 	/**
@@ -257,60 +259,73 @@
 	/**
 	 * Subscribe to error/status updates
 	 */
-	Status.prototype.watch = function (robotNames, callback) {
+	Status.prototype.watch = function(robotNames, callback) {
 		this.selector.setMaxListeners(0);
 		this.selector._connection.setMaxListeners(0);
-		let sendData = [];
-		let robotIds = [];
 		return Promise.try(_ => {
-			let req = this.selector.request({
+			this.selector.request({
 				service: 'status',
 				func: 'GetManagedObjects',
 				obj: {
 					interface: 'org.freedesktop.DBus.ObjectManager',
 				}
-			}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
-				let robotName = '';
-				let robotId = 1;
-				for (let objectPath in objData) {
-					if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
-						robotName = objData[objectPath]['fr.partnering.Status.Robot'].RobotName;
-						robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId;
-						robotIds[robotName] = robotId;
-						this.getAllStatuses(robotName, function (model) {
-							callback(model, peerId);
-						})
-					}
-					if (objData[objectPath]['fr.partnering.Status.Part'] != null) {
-						let subs = this.selector.subscribe({// subscribes to status changes for all parts
-							service: 'status',
-							func: 'StatusChanged',
-							obj: {
-								interface: 'fr.partnering.Status.Part',
-								path: objectPath
-							},
-							data: robotNames
-						}, (peerId, err, data) => {
-							if (err != null) {
-								Logger.error("StatusSubscribe:" + err);
-							} else {
-								sendData[0] = data;
-								this._getRobotModelFromRecv2(sendData, robotId, robotName);
-								if (typeof callback === 'function') {
-									callback(this.robotModel, peerId);
-								}
-							}
-						});
-						this.subscriptions.push(subs);
-					}
-				}
-			})
+			}, this.onGetManagedObjectsWatch.bind(this, robotNames, callback));
 		}).catch(err => {
 			Logger.error(err);
 		})
-
-
 	};
+
+	/**
+	 * Callback on GetManagedObjects in Watch
+	 */
+	Status.prototype.onGetManagedObjectsWatch = function(robotNames, callback, peerId, err, data) {// get all object paths, interfaces and properties children of Status
+		let robotName = '';
+		let robotId = 1;
+		let robotIds = [];
+		for (let objectPath in data) {
+			if (data[objectPath]['fr.partnering.Status.Robot'] != null) {
+				robotName = data[objectPath]['fr.partnering.Status.Robot'].RobotName;
+				robotId = data[objectPath]['fr.partnering.Status.Robot'].RobotId;
+				robotIds[robotName] = robotId;
+				this.getAllStatuses(robotName, this.onGetAllStatuses.bind(this, peerId, callback))
+			}
+			if (data[objectPath]['fr.partnering.Status.Part'] != null) {
+				let subs = this.selector.subscribe({// subscribes to status changes for all parts
+					service: 'status',
+					func: 'StatusChanged',
+					obj: {
+						interface: 'fr.partnering.Status.Part',
+						path: objectPath
+					},
+					data: robotNames
+				}, this.onStatusChanged.bind(this, robotId, robotName, callback));
+				this.subscriptions.push(subs);
+			}
+		}
+	}
+
+	/**
+	 * Callback on GetAllStatuses
+	 */
+	Status.prototype.onGetAllStatuses = function(peerId, callback, model) {
+		callback(model, peerId);
+	}
+
+	/**
+	 * Callback on StatusChanged
+	 */
+	Status.prototype.onStatusChanged = function(robotId, robotName, callback, peerId, err, data) {
+		let sendData = [];
+		if (err != null) {
+			Logger.error("StatusSubscribe:" + err);
+		} else {
+			sendData[0] = data;
+			this._getRobotModelFromRecv2(sendData, robotId, robotName);
+			if (typeof callback === 'function') {
+				callback(this.robotModel, peerId);
+			}
+		}
+	}
 
 	/**
 	 * Close all subscriptions
@@ -329,7 +344,6 @@
 	 * TODO USE PROMISE
 	 */
 	Status.prototype.getData = function(callback, dataConfig){
-		var dataModel = {};
 		return Promise.try(_ => {
 			if(dataConfig != null)
 				this.DataConfig(dataConfig);
@@ -341,29 +355,33 @@
 					type:"splReq",
 					dataConfig: this.dataConfig
 				}
-			}, (dnId, err, data) => {
-				if (err != null) {
-					Logger.error("[" + this.dataConfig.sensors + "] Recv err: " + JSON.stringify(err));
-					return;
-				}
-				if(data.header.error != null) {
-					// TODO : check/use err status and adapt behavior accordingly
-					Logger.error("UpdateData:\n"+JSON.stringify(data.header.reqConfig));
-					Logger.error("Data request failed ("+data.header.error.st+"): "+data.header.error.msg);
-					return;
-				}
-				//Logger.log(JSON.stringify(this.dataModel));
-				dataModel = this._getDataModelFromRecv(data);
-
-				Logger.log(this.getDataModel());
-				callback = callback.bind(this); // bind callback with Status
-				callback(dataModel); // callback func
-			});
+			}, this.onDataRequest.bind(this, callback));
 		}).catch(err => {
 			Logger.error(err)
 		})
 	};
 
+	/**
+	 * Callback on DataRequest
+	 */
+	Status.prototype.onDataRequest = function(callback, peerId, err, data) {
+		let dataModel = {};
+		if (err != null) {
+			Logger.error("[" + this.dataConfig.sensors + "] Recv err: " + JSON.stringify(err));
+			return;
+		}
+		if(data.header.error != null) {
+			// TODO : check/use err status and adapt behavior accordingly
+			Logger.error("UpdateData:\n"+JSON.stringify(data.header.reqConfig));
+			Logger.error("Data request failed ("+data.header.error.st+"): "+data.header.error.msg);
+			return;
+		}
+		//Logger.log(JSON.stringify(this.dataModel));
+		dataModel = this._getDataModelFromRecv(data);
+
+		Logger.log(this.getDataModel());
+		callback(dataModel); // callback func
+	}
 
 	/**
 	 * Update internal robot model with received data (version 2)
@@ -469,7 +487,7 @@
 	 * @param source		source
 	 * @param callback		return callback (<bool>success)
 	 */
-	DiyaSelector.prototype.setStatus = function (robotName, partName, code, source, callback) {
+	DiyaSelector.prototype.setStatus = function(robotName, partName, code, source, callback) {
 		return Promise.try(_ => {
 			var objectPath = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-") + "/Parts/" + partName;
 			this.request({
@@ -485,18 +503,23 @@
 					//partName: partName,
 					source: source | 1
 				}
-			}, (peerId, err, data) => {
-				if (err != null) {
-					if (typeof callback === 'function') callback(false);
-				}
-				else {
-					if (typeof callback === 'function') callback(true);
-				}
-			});
+			}, this.onSetPart.bind(this, callback));
 		}).catch(err => {
 			Logger.error(err)
 		})
 	};
+
+	/**
+	 * Callback on SetPart
+	 */
+	Status.prototype.onSetPart = function(callback, peerId, err, data) {
+		if (err != null) {
+			if (typeof callback === 'function') callback(false);
+		}
+		else {
+			if (typeof callback === 'function') callback(true);
+		}
+	}
 
 	/**
 	 * Get one status
@@ -505,42 +528,51 @@
 	 * @param callback		return callback(-1 if not found/data otherwise)
 	 * @param _full 	more data about status
 	 */
-	Status.prototype.getStatus = function (robotName, partName, callback/*, _full*/) {
-		let sendData = []
+	Status.prototype.getStatus = function(robotName, partName, callback/*, _full*/) {
 		return Promise.try(_ => {
-			let req = this.selector.request({
+			this.selector.request({
 				service: 'status',
 				func: 'GetManagedObjects',
 				obj: {
 					interface: 'org.freedesktop.DBus.ObjectManager',
 				}
-			}, (peerId, err, objData) => {
-
-				let objectPathRobot = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
-				let objectPathPart = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-") + "/Parts/" + partName;
-				let robotId = objData[objectPathRobot]['fr.partnering.Status.Robot'].RobotId
-				this.selector.request({
-					service: "status",
-					func: "GetPart",
-					obj: {
-						interface: 'fr.partnering.Status.Part',
-						path: objectPathPart
-					}
-				}, (peerId, err, data) => {
-					sendData.push(data)
-					this._getRobotModelFromRecv2(sendData, robotId, robotName);
-					if (err != null) {
-						if (typeof callback === 'function') callback(-1);
-					}
-					else {
-						if (typeof callback === 'function') callback(this.robotModel);
-					}
-				});
-			})
+			}, this.onGetManagedObjectsGetStatus.bind(this, robotName, partName, callback));
 		}).catch(err => {
 			Logger.error(err)
 		})
 	};
+
+	/**
+	 * Callback on GetManagedObjects in GetStatus
+	 */
+	Status.prototype.onGetManagedObjectsGetStatus = function(robotName, partName, callback, peerId, err, data) {
+		let objectPathRobot = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
+		let objectPathPart = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-") + "/Parts/" + partName;
+		let robotId = data[objectPathRobot]['fr.partnering.Status.Robot'].RobotId
+		this.selector.request({
+			service: "status",
+			func: "GetPart",
+			obj: {
+				interface: 'fr.partnering.Status.Part',
+				path: objectPathPart
+			}
+		}, this.onGetPart.bind(this, robotId, robotName, callback));
+	}
+
+	/**
+	 * Callback on GetPart
+	 */	
+	Status.prototype.onGetPart = function(robotId, robotName, callback, peerId, err, data) {
+		let sendData = []
+		sendData.push(data)
+		this._getRobotModelFromRecv2(sendData, robotId, robotName);
+		if (err != null) {
+			if (typeof callback === 'function') callback(-1);
+		}
+		else {
+			if (typeof callback === 'function') callback(this.robotModel);
+		}
+	}
 
 	/**
 	 * Get all status
@@ -549,46 +581,56 @@
 	 * @param callback		return callback(-1 if not found/data otherwise)
 	 * @param _full 	more data about status
 	 */
-	Status.prototype.getAllStatuses = function (robotName, callback) {
-		let req = this.selector.request({
+	Status.prototype.getAllStatuses = function(robotName, callback) {
+		this.selector.request({
 			service: 'status',
 			func: 'GetManagedObjects',
 			obj: {
 				interface: 'org.freedesktop.DBus.ObjectManager',
 			}
-		}, (peerId, err, objData) => { // get all object paths, interfaces and properties children of Status
-			let objectPath = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
-			if (objData[objectPath] != null) {
-				if (objData[objectPath]['fr.partnering.Status.Robot'] != null) {
-					let robotId = objData[objectPath]['fr.partnering.Status.Robot'].RobotId
-					//var full = _full || false;
-					this.selector.request({
-						service: "status",
-						func: "GetAllParts",
-						obj: {
-							interface: 'fr.partnering.Status.Robot',
-							path: objectPath
-						}
-					}, (peerId, err, data) => {
-						if (err != null) {
-							if (typeof callback === 'function') callback(-1);
-							throw new Error(err)
-						}
-						else {
-							this._getRobotModelFromRecv2(data, robotId, robotName);
-							if (typeof callback === 'function') callback(this.robotModel);
-						}
-					});
-				} else {
-					Logger.error("Interface fr.partnering.Status.Robot doesn't exist!")
-				}
-			} else {
-				Logger.error("ObjectPath " + objectPath + " doesn't exist!")
-			}
-		})
+		}, this.onGetManagedObjectsGetAllStatuses.bind(this, robotName, callback))
 	};
 
-	Status.prototype.splitAndCamelCase = function (inString, delimiter) {
+	/**
+	 * Callback on GetManagedObjects in GetAllStatuses
+	 */	
+	Status.prototype.onGetManagedObjectsGetAllStatuses = function(robotName, callback, peerId, err, data) {
+		let objectPath = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
+		if (data[objectPath] != null) {
+			if (data[objectPath]['fr.partnering.Status.Robot'] != null) {
+				let robotId = data[objectPath]['fr.partnering.Status.Robot'].RobotId
+				//var full = _full || false;
+				this.selector.request({
+					service: "status",
+					func: "GetAllParts",
+					obj: {
+						interface: 'fr.partnering.Status.Robot',
+						path: objectPath
+					}
+				}, this.onGetAllParts.bind(this, robotId, robotName, callback));
+			} else {
+				Logger.error("Interface fr.partnering.Status.Robot doesn't exist!")
+			}
+		} else {
+			Logger.error("ObjectPath " + objectPath + " doesn't exist!")
+		}
+	}
+
+	/**
+	 * Callback on GetAllParts
+	 */	
+	Status.prototype.onGetAllParts = function(robotId, robotName, callback, peerId, err, data) {
+		if (err != null) {
+			if (typeof callback === 'function') callback(-1);
+			throw new Error(err)
+		}
+		else {
+			this._getRobotModelFromRecv2(data, robotId, robotName);
+			if (typeof callback === 'function') callback(this.robotModel);
+		}
+	}
+
+	Status.prototype.splitAndCamelCase = function(inString, delimiter) {
 		let arraySplitString = inString.split(delimiter);
 		let outCamelString = '';
 		arraySplitString.forEach(str => {
