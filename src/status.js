@@ -35,12 +35,14 @@
  * License along with this library.
  */
 (function(){
+	const debug = require('debug')('status');
+	let Watcher = require('./watcher.js');
 
-	var isBrowser = !(typeof window === 'undefined');
+	let isBrowser = !(typeof window === 'undefined');
 	if(!isBrowser) { var Promise = require('bluebird'); }
 	else { var Promise = window.Promise; }
-	var DiyaSelector = d1.DiyaSelector;
-	var util = require('util');
+	let DiyaSelector = d1.DiyaSelector;
+	let util = require('util');
 
 
 	//////////////////////////////////////////////////////////////
@@ -64,7 +66,8 @@
 	function Status(selector){
 		this.selector = selector;
 		this._coder = selector.encode();
-		this.subscriptions = [];
+		this.watchers = [];
+		this.subscriptions = []; // DEPRECATED TO BE REMOVED ?
 
 		/** model of robot : available parts and status **/
 		this.robotModel = [];
@@ -260,25 +263,85 @@
 	 * Subscribe to error/status updates
 	 */
 	Status.prototype.watch = function(robotNames, callback) {
-		this.selector.setMaxListeners(0);
-		this.selector._connection.setMaxListeners(0);
-		return Promise.try(_ => {
-			this.selector.request({
-				service: 'status',
-				func: 'GetManagedObjects',
-				obj: {
-					interface: 'org.freedesktop.DBus.ObjectManager',
-				}
-			}, this.onGetManagedObjectsWatch.bind(this, robotNames, callback));
-		}).catch(err => {
-			Logger.error(err);
+
+		// do not create watcher without a callback
+		if (callback == null || typeof callback !== 'function') {
+			return null
+		}
+
+		let watcher = new Watcher(this.selector, robotNames)
+
+		// add watcher in watcher list
+		this.watchers.push(watcher)
+
+		watcher.on('data', (data) => {
+			debug(data)
+			callback(this._getRobotModelFromRecv2(data.parts,
+			                                      data.robotId,
+			                                      data.robotName),
+			         data.peerId)
 		})
+		watcher.on('stop', this._removeWatcher)
+
+		return watcher;
+
+
+
+		// // Increase number of listeners (SHOULD BE AVOIDED)
+		// this.selector.setMaxListeners(0);
+		// this.selector._connection.setMaxListeners(0);
+
+		// return Promise.try(_ => {
+		// 	this.selector.request({
+		// 		service: 'status',
+		// 		func: 'GetManagedObjects',
+		// 		obj: {
+		// 			interface: 'org.freedesktop.DBus.ObjectManager',
+		// 		}
+		// 	}, this.onGetManagedObjectsWatch.bind(this, robotNames, callback));
+		// }).catch(err => {
+		// 	Logger.error(err);
+		// })
+	};
+
+	/**
+	 * Callback to remove watcher from list
+	 * @param watcher to be removed
+	 */
+	Status.prototype._removeWatcher = function (watcher) {
+		// find and remove watcher in list
+		this.watchers.find( (el, id, watchers) => {
+			if (watcher === el) {
+				watchers.splice(id, 1); // remove
+				return true;
+			}
+			return false;
+		})
+	};
+
+	/**
+	 * Stop all watchers
+	 */
+	Status.prototype.closeSubscriptions = function () {
+		console.warn('Deprecated function use stopWatchers instead');
+		this.stopWatchers();
+	};
+	Status.prototype.stopWatchers = function () {
+		this.watchers.forEach( watcher => {
+			// remove listener on stop event to avoid purging watchers twice
+			watcher.removeListener('stop', this._removeWatcher);
+			watcher.stop();
+		});
+		this.watchers =[];
+		// this.robotModel = []; DEVEL - NEEDED ?
 	};
 
 	/**
 	 * Callback on GetManagedObjects in Watch
 	 */
-	Status.prototype.onGetManagedObjectsWatch = function(robotNames, callback, peerId, err, data) {// get all object paths, interfaces and properties children of Status
+	// get all object paths, interfaces and properties children of Status
+	Status.prototype.onGetManagedObjectsWatch = function(robotNames, callback,
+	                                                     peerId, err, data) {
 		let robotName = '';
 		let robotId = 1;
 		let robotIds = [];
@@ -327,16 +390,17 @@
 		}
 	}
 
-	/**
-	 * Close all subscriptions
-	 */
-	Status.prototype.closeSubscriptions = function(){
-		for(var i in this.subscriptions) {
-			this.subscriptions[i].close();
-		}
-		this.subscriptions =[];
-		this.robotModel = [];
-	};
+	/// DEPRECATED
+	// /**
+	//  * Close all subscriptions
+	//  */
+	// Status.prototype.closeSubscriptions = function(){
+	// 	for(var i in this.subscriptions) {
+	// 		this.subscriptions[i].close();
+	// 	}
+	// 	this.subscriptions =[];
+	// 	this.robotModel = [];
+	// };
 
 	/**
 	 * Get data given dataConfig.
@@ -385,10 +449,15 @@
 
 	/**
 	 * Update internal robot model with received data (version 2)
-	 * @param  {Object} data data received from DiyaNode by websocket
+	 * @param  {Array of Array of PartInfo (struct)} data data received from
+	 *                                                    DiyaNode by websocket
+	 * @param  {int} robotId id of the robot
+	 * @param  {string} robotName name of the robot
 	 * @return {[type]}		[description]
 	 */
-	Status.prototype._getRobotModelFromRecv2 = function(data, robotId, robotName) {
+	Status.prototype._getRobotModelFromRecv2 = function(data,
+	                                                    robotId,
+	                                                    robotName) {
 		if(this.robotModel == null)
 			this.robotModel = [];
 
@@ -472,6 +541,7 @@
 				}];
 			}
 		})
+		return this.robotModel
 	};
 
 	/** create Status service **/
@@ -561,7 +631,7 @@
 
 	/**
 	 * Callback on GetPart
-	 */	
+	 */
 	Status.prototype.onGetPart = function(robotId, robotName, callback, peerId, err, data) {
 		let sendData = []
 		sendData.push(data)
@@ -593,7 +663,7 @@
 
 	/**
 	 * Callback on GetManagedObjects in GetAllStatuses
-	 */	
+	 */
 	Status.prototype.onGetManagedObjectsGetAllStatuses = function(robotName, callback, peerId, err, data) {
 		let objectPath = "/fr/partnering/Status/Robots/" + this.splitAndCamelCase(robotName, "-");
 		if (data[objectPath] != null) {
@@ -618,7 +688,7 @@
 
 	/**
 	 * Callback on GetAllParts
-	 */	
+	 */
 	Status.prototype.onGetAllParts = function(robotId, robotName, callback, peerId, err, data) {
 		if (err != null) {
 			if (typeof callback === 'function') callback(-1);
