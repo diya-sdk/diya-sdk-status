@@ -35,6 +35,8 @@ class Watcher extends EventEmitter {
 		let options = robotNames;
 
 		this.options = options;
+
+		this._statusesDictionary = {};
 		debug(options);
 
 		this.watch(options); // start watcher
@@ -56,20 +58,21 @@ class Watcher extends EventEmitter {
 				}
 				if (this.state === 'stopped') {
 					reject(new StopCondition());
+					return;
 				}
 				debug('Request:emitData');
 				// Parse status data
-				debug(data)
-				data = this._parseGetManagedObjectsData(data)
-				debug(data)
+				debug(data);
+				data = this._parseGetManagedObjectsData(data);
+				debug(data);
 				for (let deviceName in data.devices) {
 					let device = data.devices[deviceName]
 					if (device.parts.length === 0) {
 						// TODO there should be a signal indicating
 						// that the objects paths has all be loaded...
 						// Indeed, the parts may not have been loaded yet
-						reject('Error: No part yet')
-						return
+						reject('Error: No part yet');
+						return;
 					}
 					let dataToEmit = {
 						parts: device.parts,
@@ -78,116 +81,91 @@ class Watcher extends EventEmitter {
 						peerId: peerId,
 					}
 					// Sending part data device (robot) by device
-					this.emit('data', dataToEmit)
+					this.emit('data', dataToEmit);
 				}
 				resolve();
 			});
 		})
-			.then( _ => {
-				// subscribe to Parts (TO BE IMPROVED!)
-				/**
-				 * Actually current method is subscribing to each and every part
-				 * a better way to do it would be to subscribe to robots
-				 * on condition that robots provides the adequate signals
-				 */
-				debug('Subscribing');
-				return new Promise ( (resolve, reject) =>  {
-					/// TODO subscription
-					resolve() /// TODO
-					this.subscription = this.selector.subscribe({
-						service: "ieq",
-						func: options.criteria.time.sampling,
-						data: {data: options}, // TODO : no options for signals...
-						obj:{
-							path: '/fr/partnering/Ieq',
-							interface: "fr.partnering.Ieq"
-						}
-					}, (dnd, err, data) => {
-						if (err != null) {
-							reject(err);
-							return;
-						}
-						debug('Signal:emitData');
-						debug(data)
-						data = this._parseGetManagedObjectsData(data)
-						debug(data)
-						this.emit('data', data);
-
-						this.reconnectionPeriod=0; // reset period on subscription requests
-						resolve();
-					})
+		.then( () => {
+			return new Promise ( (resolve, reject) =>  {
+				this.selector.request({
+					service: 'status',
+					func: 'Get',
+					obj: {
+						interface: 'org.freedesktop.DBus.Properties',
+						path: '/fr/partnering/Status'
+					},
+					data: {
+						interface_name: 'fr.partnering.Status',
+						property_name: 'StatusesDictionary'
+					}
+				}, (peerId, err, data) => {
+					if (err != null) {
+						reject(err);
+						return;
+					}
+					if (this.state === 'stopped') {
+						reject(new StopCondition());
+						return;
+					}
+					if (data != null) {
+						this._statusesDictionary = data;
+					} else {
+						reject('No StatusesDictionary data');
+						return;
+					}
+					resolve();
 				})
 			})
-
-		// 	// Request history data before subscribing
-		// 	this.selector.request({
-		// 		service: "ieq",
-		// 		func: "DataRequest",
-		// 		data: {
-		// 			data: JSON.stringify(options)
-		// 		},
-		// 		obj:{
-		// 			path: '/fr/partnering/Ieq',
-		// 			interface: "fr.partnering.Ieq"
-		// 		},
-		// 	}, (dnId, err, dataString) => {
-		// 		if (err != null)  {
-		// 			reject(err);
-		// 			return;
-		// 		}
-		// 		if (this.state === 'stopped') {
-		// 			reject(new StopCondition());
-		// 		}
-		// 		debug('Request:emitData');
-		// 		let data = JSON.parse(dataString);
-		// 		this.emit('data', data);
-		// 		resolve();
-		// 	});
-		// })
-		// 	.then( _ => {
-		// 		// subscribe to signal
-		// 		debug('Subscribing');
-		// 		return new Promise ( (resolve, reject) =>  {
-		// 			this.subscription = this.selector.subscribe({
-		// 				service: "ieq",
-		// 				func: options.criteria.time.sampling,
-		// 				data: {data: options}, // TODO : no options for signals...
-		// 				obj:{
-		// 					path: '/fr/partnering/Ieq',
-		// 					interface: "fr.partnering.Ieq"
-		// 				}
-		// 			}, (dnd, err, data) => {
-		// 				if (err != null) {
-		// 					reject(err);
-		// 					return;
-		// 				}
-		// 				debug('Signal:emitData');
-		// 				data = JSON.parse(data);
-		// 				this.emit('data', data);
-
-		// 				this.reconnectionPeriod=0; // reset period on subscription requests
-		// 				resolve();
-		// 			})
-		// 		})
-		// 	})
-			.catch( err => {
-				// watcher stopped : do nothing
-				if (err.name === 'StopCondition') {
-					return;
-				}
-				// try to restart later
-				debugError(err);
-				this._closeSubscriptions(); // should not be necessary
-				// increase delay by 1 sec
-				this.reconnectionPeriod = this.reconnectionPeriod+1000;
-				if (this.reconnectionPeriod > this.maxReconnectionPeriod) {
-					// max 5min
-					this.reconnectionPeriod = this.maxReconnectionPeriod;
-				}
-				this.watchTentative = setTimeout( _ => {
-					this.watch(options);
-				}, this.reconnectionPeriod); // try again later
-			});
+		})
+		.then( () => {
+			debug('Subscribing');
+			return new Promise ( (resolve, reject) =>  {
+				let subscription = this.selector.subscribe({
+					service: "status",
+					func: "StatusChanged",
+				}, (peerId, err, data) => {
+					if (err != null) {
+						reject(err);
+						return;
+					}
+					if (data != null) {
+						data = this._parseStatusChangedData(data[0])
+						for (let deviceName in data.devices) {
+							let device = data.devices[deviceName]
+							let dataToEmit = {
+								parts: device.parts,
+								robotId: device.robotId,
+								robotName: device.robotName,
+								peerId: peerId,
+							}
+							this.emit('data', dataToEmit);
+						}
+					}
+					this.reconnectionPeriod = 0; // reset period on subscription requests
+					resolve();
+				})
+				this.subscriptions.push(subscription)
+			})
+		})
+		.catch(err => {
+			// watcher stopped : do nothing
+			if (err.name === 'StopCondition') {
+				return;
+			}
+			// try to restart later
+			debugError(err);
+			this._closeSubscriptions(); // should not be necessary
+			// increase delay by 1 sec
+			this.reconnectionPeriod = this.reconnectionPeriod + 1000;
+			if (this.reconnectionPeriod > this.maxReconnectionPeriod) {
+				// max 5min
+				this.reconnectionPeriod = this.maxReconnectionPeriod;
+			}
+			this.watchTentative = setTimeout( () => {
+				this.watch(options);
+			}, this.reconnectionPeriod); // try again later
+		});
 
 	}
 
@@ -202,30 +180,30 @@ class Watcher extends EventEmitter {
 			devices: {}
 		}
 		if (data == null) {
-			return parsedData
+			return parsedData;
 		}
 
 		// For each object path
 		for (let path in data) {
-			let obj = data[path]
-			let splitPath = path.split('/')
+			let obj = data[path];
+			let splitPath = path.split('/');
 			if (splitPath.length === 6) {
 				// with device path, split path has 6 items
 				for (let iface in obj) {
 					if (iface === "fr.partnering.Status.Robot") {
 						// Interface of the device objects
-						let device = obj[iface]
+						let device = obj[iface];
 						// Find product name and id
-						let robotName = splitPath[5].toLowerCase()
-						let selDevice = parsedData.devices[robotName]
+						let robotName = splitPath[5].toLowerCase();
+						let selDevice = parsedData.devices[robotName];
 						if (selDevice == null) {
 							selDevice = {
 								parts: []
 							}
-							parsedData.devices[robotName] = selDevice
+							parsedData.devices[robotName] = selDevice;
 						}
-						selDevice.robotName = device.RobotName
-						selDevice.robotId = device.RobotId
+						selDevice.robotName = device.RobotName;
+						selDevice.robotId = device.RobotId;
 					}
 				}
 			} else if (splitPath.length === 8) {
@@ -233,45 +211,93 @@ class Watcher extends EventEmitter {
 				for (let iface in obj) {
 					if (iface === "fr.partnering.Status.Part") {
 						// Interface of the part objects
-						let part = obj[iface]
+						let part = obj[iface];
 						// Find product name
-						let robotName = splitPath[5].toLowerCase()
-						let selDevice = parsedData.devices[robotName]
+						let robotName = splitPath[5].toLowerCase();
+						let selDevice = parsedData.devices[robotName];
 						if (selDevice == null) {
 							selDevice = {
 								parts: []
 							}
-							parsedData.devices[robotName] = selDevice
+							parsedData.devices[robotName] = selDevice;
 						}
 						// Build part array
 						// TODO optimize how the data are used :
 						// actually converting object to array then
 						// from array to object again...
-						let newPart = []
-						newPart[0] = part.PartId
-						newPart[1] = part.Category
-						newPart[2] = part.PartName
-						newPart[3] = "" // Label is unused in practice
-						newPart[4] = part.Time
-						newPart[5] = part.Code
-						newPart[6] = part.CodeRef
-						newPart[7] = part.Msg
-						newPart[8] = part.CritLevel
+						let newPart = [];
+						newPart[0] = part.PartId;
+						newPart[1] = part.Category;
+						newPart[2] = part.PartName;
+						newPart[3] = ""; // Label is unused in practice
+						newPart[4] = part.Time;
+						newPart[5] = part.Code;
+						newPart[6] = part.CodeRef;
+						newPart[7] = part.Msg;
+						newPart[8] = part.CritLevel;
 						newPart[9] = "" // Description is unused in practice
 
-						selDevice.parts.push(newPart)
+						selDevice.parts.push(newPart);
 					}
 				}
 
 			} else {
-				debugError("Undefined path format")
+				debugError("Undefined path format");
 			}
 		}
 
 
 		// Read Robot name and robot Id
 		// Read Part data
-		return parsedData
+		return parsedData;
+	}
+
+	_parseStatusChangedData (data) {
+		let parsedData = {};
+		data.forEach( (event) => {
+			let robotName = event[0];
+			let robotId = event[1];
+			let time = event[2];
+			let statusEventId = event[3];
+			let code = event[4];
+			let robotNameLowerCase = robotName.toLowerCase();
+			if (this._statusesDictionary[statusEventId][0] !== statusEventId) {
+				console.error("Malformed statuses dictionary");
+				return;
+			}
+			let partId = this._statusesDictionary[statusEventId][1];
+			let codeRef = this._statusesDictionary[statusEventId][2];
+			let partName = this._statusesDictionary[statusEventId][3];
+			let category = this._statusesDictionary[statusEventId][4];
+			let msg = this._statusesDictionary[statusEventId][5];
+			let critLevel = this._statusesDictionary[statusEventId][6];
+			let label = ""; // Label is unused in practice
+			let description = ""; // Description is unused in practice
+			if (parsedData.devices == null) {
+				parsedData.devices = [];
+			}
+			if (parsedData.devices[robotNameLowerCase] == null) {
+				parsedData.devices[robotNameLowerCase] = {};
+			}
+			parsedData.devices[robotNameLowerCase].robotId = robotId;
+			parsedData.devices[robotNameLowerCase].robotName = robotName;
+			if (parsedData.devices[robotNameLowerCase].parts == null) {
+				parsedData.devices[robotNameLowerCase].parts = [];
+			}
+			let newPart = [];
+			newPart[0] = partId;
+			newPart[1] = category;
+			newPart[2] = partName;
+			newPart[3] = label;
+			newPart[4] = time;
+			newPart[5] = code;
+			newPart[6] = codeRef;
+			newPart[7] = msg;
+			newPart[8] = critLevel;
+			newPart[9] = description;
+			parsedData.devices[robotNameLowerCase].parts.push(newPart);
+		});
+		return parsedData;
 	}
 
 	// Close all subscriptions if any
