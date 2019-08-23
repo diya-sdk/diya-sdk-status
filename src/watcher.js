@@ -17,7 +17,7 @@ class Watcher extends EventEmitter {
 	 * @param emit emit data (mandatory)
 	 * @param config to get data from server
 	 */
-	constructor (selector, robotNames) {
+	constructor (selector, options) {
 		super();
 
 		this.selector = selector;
@@ -32,9 +32,9 @@ class Watcher extends EventEmitter {
 		this.selector._connection.setMaxListeners(0);
 
 		/** initialise options for request **/
-		let options = robotNames;
-
-		this.options = options;
+		if (options.signal == null) {
+			options.signal = 'StatusesBuffered';
+		}
 
 		this._statusesDictionary = {};
 		debug(options);
@@ -123,7 +123,7 @@ class Watcher extends EventEmitter {
 			return new Promise ( (resolve, reject) =>  {
 				let subscription = this.selector.subscribe({
 					service: "status",
-					func: "StatusChanged",
+					func: options.signal,
 				}, (peerId, err, data) => {
 					if (err != null) {
 						reject(err);

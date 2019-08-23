@@ -76,14 +76,14 @@
 	/**
 	 * Subscribe to error/status updates
 	 */
-	Status.prototype.watch = function(robotNames, callback) {
+	Status.prototype.watch = function(options, callback) {
 
 		// do not create watcher without a callback
 		if (callback == null || typeof callback !== 'function') {
 			return null;
 		}
 
-		let watcher = new Watcher(this.selector, robotNames);
+		let watcher = new Watcher(this.selector, options);
 
 		// add watcher in watcher list
 		this.watchers.push(watcher);
