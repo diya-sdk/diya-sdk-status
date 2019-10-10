@@ -1,14 +1,33 @@
+/*
+ * Copyright : Partnering 3.0 (2007-2019)
+ * Author : Sylvain Mahé <sylvain.mahe@partnering.fr>
+ *
+ * This file is part of diya-sdk.
+ *
+ * diya-sdk is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * any later version.
+ *
+ * diya-sdk is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with diya-sdk.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+'use strict';
+
 const EventEmitter = require('eventemitter3');
 const debug = require('debug')('status:watcher');
 const debugError = require('debug')('status:watcher:errors');
-//! const getTimeSampling = require('./timecontrol.js').getTimeSampling;
-
-'use strict';
 
 class StopCondition extends Error {
 	constructor(msg) {
 		super(msg);
-		this.name='StopCondition'
+		this.name = 'StopCondition';
 	}
 }
 
@@ -52,7 +71,7 @@ class Watcher extends EventEmitter {
 					interface: 'org.freedesktop.DBus.ObjectManager',
 				}
 			}, (peerId, err, data) => {
-				if (err != null)  {
+				if (err != null) {
 					reject(err);
 					return;
 				}
@@ -66,7 +85,7 @@ class Watcher extends EventEmitter {
 				data = this._parseGetManagedObjectsData(data);
 				debug(data);
 				for (let deviceName in data.devices) {
-					let device = data.devices[deviceName]
+					let device = data.devices[deviceName];
 					if (device.parts.length === 0) {
 						// TODO there should be a signal indicating
 						// that the objects paths has all be loaded...
@@ -79,7 +98,7 @@ class Watcher extends EventEmitter {
 						robotId: device.robotId,
 						robotName: device.robotName,
 						peerId: peerId,
-					}
+					};
 					// Sending part data device (robot) by device
 					this.emit('data', dataToEmit);
 				}
@@ -87,7 +106,7 @@ class Watcher extends EventEmitter {
 			});
 		})
 		.then( () => {
-			return new Promise ( (resolve, reject) =>  {
+			return new Promise( (resolve, reject) => {
 				this.selector.request({
 					service: 'status',
 					func: 'Get',
@@ -115,12 +134,12 @@ class Watcher extends EventEmitter {
 						return;
 					}
 					resolve();
-				})
-			})
+				});
+			});
 		})
 		.then( () => {
 			debug('Subscribing');
-			return new Promise ( (resolve, reject) =>  {
+			return new Promise( (resolve, reject) => {
 				let subscription = this.selector.subscribe({
 					service: "status",
 					func: options.signal,
@@ -138,17 +157,17 @@ class Watcher extends EventEmitter {
 								robotId: device.robotId,
 								robotName: device.robotName,
 								peerId: peerId,
-							}
+							};
 							this.emit('data', dataToEmit);
 						}
 					}
 					this.reconnectionPeriod = 0; // reset period on subscription requests
 					resolve();
 				})
-				this.subscriptions.push(subscription)
+				this.subscriptions.push(subscription);
 			})
 		})
-		.catch(err => {
+		.catch( err => {
 			// watcher stopped : do nothing
 			if (err.name === 'StopCondition') {
 				return;
@@ -166,7 +185,6 @@ class Watcher extends EventEmitter {
 				this.watch(options);
 			}, this.reconnectionPeriod); // try again later
 		});
-
 	}
 
 	/**
@@ -178,7 +196,7 @@ class Watcher extends EventEmitter {
 	_parseGetManagedObjectsData (data) {
 		let parsedData = {
 			devices: {}
-		}
+		};
 		if (data == null) {
 			return parsedData;
 		}
@@ -199,7 +217,7 @@ class Watcher extends EventEmitter {
 						if (selDevice == null) {
 							selDevice = {
 								parts: []
-							}
+							};
 							parsedData.devices[robotName] = selDevice;
 						}
 						selDevice.robotName = device.RobotName;
@@ -218,7 +236,7 @@ class Watcher extends EventEmitter {
 						if (selDevice == null) {
 							selDevice = {
 								parts: []
-							}
+							};
 							parsedData.devices[robotName] = selDevice;
 						}
 						// Build part array
@@ -303,7 +321,7 @@ class Watcher extends EventEmitter {
 	// Close all subscriptions if any
 	_closeSubscriptions () {
 		debug('In closeSubscription');
-		for(var i in this.subscriptions) {
+		for (var i in this.subscriptions) {
 			this.subscriptions[i].close();
 		}
 		this.subscriptions = [];
