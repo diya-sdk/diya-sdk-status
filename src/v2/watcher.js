@@ -194,6 +194,7 @@ class Watcher extends EventEmitter {
 	 * @return {Object{String,String,Array of Array of PartInfo} parsedData
 	 */
 	_parseGetManagedObjectsData (data) {
+		let peers = this.selector._connection.peers().map(peer => peer.toLowerCase().replace('-',''));
 		let parsedData = {
 			devices: {}
 		};
@@ -209,53 +210,57 @@ class Watcher extends EventEmitter {
 				// with device path, split path has 6 items
 				for (let iface in obj) {
 					if (iface === "fr.partnering.Status.Robot") {
-						// Interface of the device objects
-						let device = obj[iface];
 						// Find product name and id
 						let robotName = splitPath[5].toLowerCase();
-						let selDevice = parsedData.devices[robotName];
-						if (selDevice == null) {
-							selDevice = {
-								parts: []
-							};
-							parsedData.devices[robotName] = selDevice;
+						if (peers.includes(robotName)) {
+							// Interface of the device objects
+							let device = obj[iface];
+							let selDevice = parsedData.devices[robotName];
+							if (selDevice == null) {
+								selDevice = {
+									parts: []
+								};
+								parsedData.devices[robotName] = selDevice;
+							}
+							selDevice.robotName = device.RobotName;
+							selDevice.robotId = device.RobotId;
 						}
-						selDevice.robotName = device.RobotName;
-						selDevice.robotId = device.RobotId;
 					}
 				}
 			} else if (splitPath.length === 8) {
 				// with part path, split path has 8 items
 				for (let iface in obj) {
 					if (iface === "fr.partnering.Status.Part") {
-						// Interface of the part objects
-						let part = obj[iface];
 						// Find product name
 						let robotName = splitPath[5].toLowerCase();
-						let selDevice = parsedData.devices[robotName];
-						if (selDevice == null) {
-							selDevice = {
-								parts: []
-							};
-							parsedData.devices[robotName] = selDevice;
-						}
-						// Build part array
-						// TODO optimize how the data are used :
-						// actually converting object to array then
-						// from array to object again...
-						let newPart = [];
-						newPart[0] = part.PartId;
-						newPart[1] = part.Category;
-						newPart[2] = part.PartName;
-						newPart[3] = ""; // Label is unused in practice
-						newPart[4] = part.Time;
-						newPart[5] = part.Code;
-						newPart[6] = part.CodeRef;
-						newPart[7] = part.Msg;
-						newPart[8] = part.CritLevel;
-						newPart[9] = "" // Description is unused in practice
+						if (peers.includes(robotName)) {
+							// Interface of the part objects
+							let part = obj[iface];
+							let selDevice = parsedData.devices[robotName];
+							if (selDevice == null) {
+								selDevice = {
+									parts: []
+								};
+								parsedData.devices[robotName] = selDevice;
+							}
+							// Build part array
+							// TODO optimize how the data are used :
+							// actually converting object to array then
+							// from array to object again...
+							let newPart = [];
+							newPart[0] = part.PartId;
+							newPart[1] = part.Category;
+							newPart[2] = part.PartName;
+							newPart[3] = ""; // Label is unused in practice
+							newPart[4] = part.Time;
+							newPart[5] = part.Code;
+							newPart[6] = part.CodeRef;
+							newPart[7] = part.Msg;
+							newPart[8] = part.CritLevel;
+							newPart[9] = "" // Description is unused in practice
 
-						selDevice.parts.push(newPart);
+							selDevice.parts.push(newPart);
+						}
 					}
 				}
 
