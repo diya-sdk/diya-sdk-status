@@ -22,7 +22,21 @@
 	const ConnectorV1 = require("./v1/connector.js");
 	const ConnectorV2 = require(`./v2/connector.js`)
 
-	let DiyaSelector = d1.DiyaSelector;
+	let DiyaSelector;
+	try {
+		// For browsers - d1 already defined
+		DiyaSelector = d1.DiyaSelector;
+	}
+	catch (error) {
+		if (error.name === 'ReferenceError') {
+			// For nodejs - define d1
+			const d1 = require('../../diya-sdk/src/diya-sdk');
+			DiyaSelector = d1.DiyaSelector;
+		} else {
+			throw error;
+		}
+	}
+
 
 	/** create Status service **/
 	DiyaSelector.prototype.Status = function () {
@@ -38,19 +52,19 @@
 				}
 			})
 		})
-		.then( (data) => {
-			if (data === 2) {
-				return new ConnectorV2(this);
-			} else {
-				throw new Error('Cannot instantiate connector')
-			}
-		})
-		.catch( (err) => {
-			if (err.includes("Method 'GetAPIVersion' not found in introspection data")) {
-				return new ConnectorV1(this);
-			} else {
-				throw new Error(err);
-			}
-		});
+			.then( (data) => {
+				if (data === 2) {
+					return new ConnectorV2(this);
+				} else {
+					throw new Error('Cannot instantiate connector')
+				}
+			})
+			.catch( (err) => {
+				if (err.includes("Method 'GetAPIVersion' not found in introspection data")) {
+					return new ConnectorV1(this);
+				} else {
+					throw new Error(err);
+				}
+			});
 	};
 })()
